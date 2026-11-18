@@ -149,6 +149,9 @@ def client_ip(request: Request) -> str:
     that APPEND to X-Forwarded-For, take the hops-th entry from the RIGHT: everything left of it is
     client-supplied and spoofable, the entries our own proxies appended are not."""
     peer = request.client.host if request.client else "?"
+    hdr = os.environ.get("KASA_CLIENT_IP_HEADER", "")   # e.g. fly-client-ip: a header the platform proxy sets itself
+    if hdr and _trusted_proxy(peer) and request.headers.get(hdr):
+        return request.headers[hdr].split(",")[0].strip()
     hops = int(os.environ.get("KASA_PROXY_HOPS", "0") or 0)
     if hops > 0 and _trusted_proxy(peer):   # header is only meaningful when the TCP peer is our own proxy
         parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]

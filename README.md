@@ -38,3 +38,6 @@ KASA_DATA=./data uvicorn server.main:app --port 8000     # veya: docker compose 
 çok düşükse herkes proxy IP'si gibi görünür (sınır herkes için ortak dolar), çok yüksekse sahte IP kabul edilir. Dağıtımdan sonra kendi IP'nizle bir yanlış giriş deneyip sunucu günlüğünden doğrulayın.
 
 `KASA_TRUSTED_PROXIES`: `X-Forwarded-For` yalnızca bu CIDR listesinden gelen bağlantılarda okunur (varsayılan: loopback + özel ağlar). Mümkünse proxy'nizin tam adresine daraltın, örn. `172.17.0.1/32`.
+
+## Fly.io
+`fly.toml` hazır: tek makine + `kasa_data` hacmi. `fly auth login` → `fly launch --no-deploy --copy-config` → `fly volumes create kasa_data --size 1 --region fra` → `fly deploy --ha=false`.
