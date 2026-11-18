@@ -1,4 +1,4 @@
-app = "kasa-dernek"          # must be globally unique; change if taken
+app = "vaultly-team"          # must be globally unique; change if taken
 primary_region = "fra"
 
 [build]
