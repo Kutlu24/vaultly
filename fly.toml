@@ -6,6 +6,9 @@ primary_region = "fra"
 [env]
   KASA_DATA = "/data"
   KASA_CLIENT_IP_HEADER = "fly-client-ip"   # set by Fly's proxy, cannot be forged by clients
+  # only Fly's private network (6PN fdaa::/16, 172.16.0.0/16) may supply that header; if the proxy comes from
+  # elsewhere the header is ignored and the socket address is used (fails safe: shared limit, no spoofing)
+  KASA_TRUSTED_PROXIES = "fdaa::/16,172.16.0.0/16"
 
 [http_service]
   internal_port = 8000
