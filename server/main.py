@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS members(
   vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('owner','editor','viewer')),
-  wrapped_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', PRIMARY KEY(vault_id,user_id));
+  wrapped_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', invited_by TEXT, PRIMARY KEY(vault_id,user_id));
 CREATE TABLE IF NOT EXISTS items(
   id TEXT PRIMARY KEY, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
   data TEXT NOT NULL, trashed INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL DEFAULT 1,
@@ -91,6 +91,10 @@ with db() as _c:
         _c.execute("ALTER TABLE members ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
     except sqlite3.OperationalError:
         pass  # already present
+    try:
+        _c.execute("ALTER TABLE members ADD COLUMN invited_by TEXT")
+    except sqlite3.OperationalError:
+        pass
 
 app = FastAPI(title="Kasa", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -319,14 +323,15 @@ def login(body: Login, request: Request):
     email = norm_email(body.email)
     key = "login:" + client_ip(request) + ":" + email
     acct = "acct:" + email  # per-account limit: rotating IPs does not reset it
-    throttle(key); throttle(acct, 20, 900)
+    throttle(key)
+    time.sleep(min(0.5 * max(0, _fails.get(acct, (0, 0))[0] - 5), 8))  # progressive delay, never a hard lockout
     with db() as con:
         u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         ok = verify_auth(body.auth, u["auth_hash"] if u else DUMMY_HASH) and u is not None and not u["disabled"]
         if not ok:
             fail(key); fail(acct)
             raise HTTPException(401, "E-posta veya ana parola hatalı")
-        _fails.pop(key, None)
+        _fails.pop(key, None); _fails.pop(acct, None)
         log(con, u["id"], None, "user.login", client_ip(request))
         return {"token": new_session(con, u["id"]), "user": user_public(u)}
 
@@ -434,7 +439,8 @@ def list_vaults(u=Depends(current_user)):
     with db() as con:
         rows = con.execute(
             "SELECT v.id,v.enc_name,m.role,m.wrapped_key,m.status,(v.created_by=m.user_id) AS mine,"
-            "(SELECT email FROM users WHERE id=v.created_by) AS creator,"
+            "(SELECT email FROM users WHERE id=m.invited_by) AS creator,"
+            "(SELECT group_concat(u2.email, ', ') FROM members m2 JOIN users u2 ON u2.id=m2.user_id WHERE m2.vault_id=v.id AND m2.role='owner' AND m2.status='active') AS owners,"
             "(SELECT COUNT(*) FROM members WHERE vault_id=v.id AND status='active') AS member_count "
             "FROM vaults v JOIN members m ON m.vault_id=v.id WHERE m.user_id=? ORDER BY v.created_at",
             (u["id"],)).fetchall()
@@ -488,8 +494,8 @@ def add_member(vid: str, body: AddMember, u=Depends(current_user)):
         if body.user_id == u["id"]:
             raise HTTPException(400, "Zaten üyesiniz")
         # invitee must accept before the vault key becomes usable / vault shows up in their account
-        con.execute("INSERT INTO members(vault_id,user_id,role,wrapped_key,status) VALUES(?,?,?,?,'pending')",
-                    (vid, body.user_id, body.role, body.wrapped_key))
+        con.execute("INSERT INTO members(vault_id,user_id,role,wrapped_key,status,invited_by) VALUES(?,?,?,?,'pending',?)",
+                    (vid, body.user_id, body.role, body.wrapped_key, u["id"]))
         log(con, u["id"], vid, "member.invite", f"{body.user_id}:{body.role}")
     return {"ok": True}
 

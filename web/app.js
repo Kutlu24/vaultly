@@ -140,7 +140,7 @@ async function loadAll() {
     try {
       const key = await C.unwrapVaultKey(v.wrapped_key, S.priv);
       const name = (await C.decJSON(key, v.enc_name)).name;
-      S.vaults.push({ id: v.id, name, role: v.role, key, member_count: v.member_count, mine: !!v.mine, creator: v.creator });
+      S.vaults.push({ id: v.id, name, role: v.role, key, member_count: v.member_count, mine: !!v.mine, owners: v.owners });
       for (const it of await api('GET', `/vaults/${v.id}/items`)) {
         try { S.items.set(it.id, { id: it.id, vid: v.id, data: await C.decJSON(key, it.data), trashed: it.trashed, rev: it.rev, updated_at: it.updated_at }); }
         catch { /* undecryptable item: skipped */ }
@@ -184,8 +184,8 @@ function renderSide() {
     h('h4', {}, 'Türler'),
     ...Object.entries(TYPES).map(([t, l]) => nav(l, { k: 'type', t }, live.filter((i) => i.data.type === t).length)),
     h('h4', {}, 'Kasalar'),
-    ...S.vaults.map((x) => nav(x.name, { k: 'vault', id: x.id }, live.filter((i) => i.vid === x.id).length, x.member_count > 1 || !x.mine ? h('span', { class: 'count', title: (x.mine ? '' : 'Sahibi: ' + x.creator + ' · ') + x.member_count + ' üye' }, '👥') : null)),
-    ...S.pending.map((p) => h('div', { class: 'card' }, h('div', {}, '📨 Kasa daveti'), h('div', { class: 'muted' }, `${p.creator} sizi bir kasaya (${ROLES[p.role]}) eklemek istiyor. Kabul edene kadar içeriğe erişemez ve göremezsiniz.`),
+    ...S.vaults.map((x) => nav(x.name, { k: 'vault', id: x.id }, live.filter((i) => i.vid === x.id).length, x.member_count > 1 || !x.mine ? h('span', { class: 'count', title: (x.mine ? '' : 'Sahipleri: ' + x.owners + ' · ') + x.member_count + ' üye' }, '👥') : null)),
+    ...S.pending.map((p) => h('div', { class: 'card' }, h('div', {}, '📨 Kasa daveti'), h('div', { class: 'muted' }, `Davet eden: ${p.creator || '?'} · Rol: ${ROLES[p.role]} · Kasa sahipleri: ${p.owners || '?'}. Tanımadığınız birinden gelen daveti reddedin. Kabul edene kadar içeriğe erişilemez.`),
       h('div', { class: 'row' }, h('button', { class: 'small primary', onclick: async () => { try { await api('POST', `/vaults/${p.id}/accept`); await loadAll(); renderAll(); toast('Kasa eklendi'); } catch (e) { toast(errMsg(e)); } } }, 'Kabul'),
         h('button', { class: 'small danger', onclick: async () => { try { await api('DELETE', `/vaults/${p.id}/members/${S.user.id}`); await loadAll(); renderAll(); } catch (e) { toast(errMsg(e)); } } }, 'Reddet')))),
     h('button', { class: 'nav', onclick: newVaultDialog }, h('span', { class: 'muted' }, '+ Yeni kasa')),
