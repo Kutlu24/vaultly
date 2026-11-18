@@ -132,13 +132,22 @@ def fail(key: str, window: int = 300):
     _fails[key] = (n + 1, ts)
 
 
+def _is_internal(ip: str) -> bool:
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+        return a.is_loopback or a.is_private
+    except ValueError:
+        return False
+
+
 def client_ip(request: Request) -> str:
     """Real client IP. Without a reverse proxy: the socket peer. Behind KASA_PROXY_HOPS trusted proxies
     that APPEND to X-Forwarded-For, take the hops-th entry from the RIGHT: everything left of it is
     client-supplied and spoofable, the entries our own proxies appended are not."""
     peer = request.client.host if request.client else "?"
     hops = int(os.environ.get("KASA_PROXY_HOPS", "0") or 0)
-    if hops > 0:
+    if hops > 0 and _is_internal(peer):   # header is only meaningful when the TCP peer is our own proxy
         parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
         if len(parts) >= hops:
             return parts[-hops]
