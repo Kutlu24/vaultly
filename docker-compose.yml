@@ -1,0 +1,6 @@
+services:
+  kasa:
+    build: .
+    restart: unless-stopped
+    ports: ["127.0.0.1:8011:8000"]   # put HTTPS in front (tailscale serve / Caddy); WebCrypto needs a secure context
+    volumes: ["./data:/data"]

@@ -1,0 +1,53 @@
+// UI smoke test: headless Chrome driven over CDP. Registers, creates a login, checks TOTP + monitor + generator.
+import { spawn } from 'node:child_process';
+const URL_ = process.env.KASA_URL || 'http://localhost:8099/';
+const ch = spawn('google-chrome', ['--headless=new', '--no-sandbox', '--remote-debugging-port=9333', '--user-data-dir=/tmp/kasa-ui-prof', 'about:blank'], { stdio: 'ignore' });
+await new Promise((r) => setTimeout(r, 2500));
+const tabs = await (await fetch('http://localhost:9333/json')).json();
+const ws = new WebSocket(tabs.find((t) => t.type === 'page').webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
+let id = 0; const pend = new Map(); const errs = [];
+ws.onmessage = (m) => { const j = JSON.parse(m.data); if (j.id && pend.has(j.id)) pend.get(j.id)(j); else if (j.method === 'Runtime.exceptionThrown') errs.push(j.params.exceptionDetails.exception?.description || 'exc'); else if (j.method === 'Runtime.consoleAPICalled' && j.params.type === 'error') errs.push(JSON.stringify(j.params.args.map((a) => a.value)));  else if (j.method === 'Log.entryAdded' && j.params.entry.level === 'error') errs.push(j.params.entry.text + ' ' + (j.params.entry.url || '')); };
+const send = (method, params = {}) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }); if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception?.description)); return r.result.result.value; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const waitFor = async (expr, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr)) return; await sleep(200); } throw new Error('timeout: ' + expr); };
+const setVal = (sel, v) => ev(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});e.value=${JSON.stringify(v)};e.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+await send('Runtime.enable'); await send('Log.enable'); await send('Page.navigate', { url: URL_ });
+let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
+try {
+  await waitFor(`!!document.querySelector('form.auth')`);
+  ok(/Yönetici hesabını/.test(await ev(`document.body.innerText`)), 'setup screen shown');
+  await setVal('input[type=email]', 'admin@ekip.ch'); await setVal('input[autocomplete=name]', 'Ada Admin');
+  await ev(`(()=>{const p=document.querySelectorAll('input[type=password]');for(const x of p){x.value='ilk kurulum icin uzun parola 77';x.dispatchEvent(new Event('input',{bubbles:true}))}})()`);
+  await ev(`document.querySelector('form.auth').requestSubmit()`);
+  await waitFor(`!!document.querySelector('.shell')`);
+  ok(true, 'registered and shell rendered');
+  ok(/Kişisel/.test(await ev(`document.querySelector('.side').innerText`)), 'personal vault auto-created');
+  await ev(`document.querySelector('.toolbar .primary').click()`);
+  await waitFor(`!!document.querySelector('.detail form')`);
+  const names = await ev(`[...document.querySelectorAll('.detail form input')].length`); ok(names >= 5, 'edit form rendered');
+  const f = `document.querySelectorAll('.detail form input[type=text]')`;
+  await ev(`(()=>{const i=${f};i[0].value='GitHub';i[1].value='ada@ekip.ch';i[2].value='Xk9#mP2$vL8@qR4!';i[3].value='github.com';i[4].value='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';})()`);
+  await ev(`document.querySelector('.detail form').requestSubmit()`);
+  await waitFor(`document.querySelector('.detail h2')?.innerText.includes('GitHub')`);
+  ok(true, 'item saved + shown');
+  await waitFor(`/\\d{3} \\d{3}/.test(document.querySelector('.totp')?.innerText||'')`); ok(true, 'live TOTP code displayed');
+  ok(await ev(`document.querySelector('.items').innerText.includes('GitHub')`), 'item in list');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Güvenlik')).click()`);
+  await waitFor(`document.querySelector('.detail h2')?.innerText==='Güvenlik Taraması'`); ok(true, 'monitor view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Yönetim')).click()`);
+  await waitFor(`document.querySelector('.detail').innerText.includes('Davet oluştur')`); ok(true, 'admin view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Ayarlar')).click()`);
+  await waitFor(`document.querySelector('.detail').innerText.includes('parmak izi')`); ok(true, 'settings view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Parola üretici')).click()`);
+  await waitFor(`document.querySelector('dialog .genout')?.innerText.length>=20`); ok(true, 'generator dialog');
+  await ev(`document.querySelector('dialog').close()`);
+  // lock + re-login (proves data survives decrypt round trip)
+  await ev(`[...document.querySelectorAll('button')].find(b=>b.innerText.includes('Kilitle')).click()`);
+  await waitFor(`!!document.querySelector('form.auth')`);
+  await setVal('input[type=email]', 'admin@ekip.ch'); await setVal('input[type=password]', 'ilk kurulum icin uzun parola 77');
+  await ev(`document.querySelector('form.auth').requestSubmit()`);
+  await waitFor(`document.querySelector('.items')?.innerText.includes('GitHub')`); ok(true, 'login again decrypts stored item');
+} catch (e) { console.log('FAIL', e.message); fail++; console.log((await ev(`document.body.innerText.slice(0,400)`).catch(() => ''))); }
+ok(errs.length === 0, 'no console errors / CSP violations' + (errs.length ? ': ' + errs.join(' | ') : ''));
+ch.kill(); process.exit(fail ? 1 : 0);
