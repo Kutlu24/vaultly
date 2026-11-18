@@ -1,4 +1,4 @@
-# Kasa — ekip şifre yöneticisi
+# Vaultly — ekip şifre yöneticisi
 
 Kendi sunucunuzda çalışan, uçtan uca şifreli (zero-knowledge) ekip şifre kasası.
 

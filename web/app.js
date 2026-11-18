@@ -80,7 +80,7 @@ async function renderAuth(mode, msg) {
   const meter = h('div', { class: 'bar' }, h('i'));
   const meterT = h('div', { class: 'muted' });
   const out = h('div', { class: 'err' }, msg || '');
-  const btn = h('button', { class: 'primary', type: 'submit' }, mode === 'setup' ? 'Yönetici hesabını oluştur' : reg ? 'Hesap oluştur' : 'Kasa\'yı aç');
+  const btn = h('button', { class: 'primary', type: 'submit' }, mode === 'setup' ? 'Yönetici hesabını oluştur' : reg ? 'Hesap oluştur' : 'Giriş yap');
   pw.addEventListener('input', () => {
     if (!reg) return; const s = C.strength(pw.value);
     meter.firstChild.className = 's' + s.level; meter.firstChild.style.width = Math.min(100, s.bits) + '%'; meterT.textContent = s.label ? `${s.label} · ~${s.bits} bit` : '';
@@ -104,7 +104,7 @@ async function renderAuth(mode, msg) {
       }
     } catch (ex) { out.textContent = errMsg(ex); btn.disabled = false; btn.textContent = 'Tekrar dene'; }
   } },
-    h('h1', {}, h('img', { class: 'logo', src: 'icon.svg', alt: '' }), 'Kasa'),
+    h('h1', {}, h('img', { class: 'logo', src: 'icon.svg', alt: '' }), 'Vaultly'),
     h('p', { class: 'muted' }, mode === 'setup' ? 'İlk kurulum: bu hesap sistemin yöneticisi olacak.' : reg ? 'Davet koduyla ekibe katılın.' : 'Ekibinizin şifre kasası. Uçtan uca şifreli.'),
     h('label', {}, 'E-posta'), email,
     reg && [h('label', {}, 'Ad Soyad'), name],
@@ -178,7 +178,7 @@ function renderSide() {
   const nav = (label, view, count, extra) => h('button', { class: 'nav' + (JSON.stringify(v) === JSON.stringify(view) ? ' active' : ''), onclick: () => go(view) },
     h('span', {}, label), count != null && h('span', { class: 'count' }, count), extra);
   const s = el.side; s.replaceChildren(
-    h('div', { class: 'brand' }, h('img', { class: 'logo', src: 'icon.svg', alt: '', width: 24, height: 24 }), 'Kasa'),
+    h('div', { class: 'brand' }, h('img', { class: 'logo', src: 'icon.svg', alt: '', width: 24, height: 24 }), 'Vaultly'),
     nav('Tümü', { k: 'all' }, live.length),
     nav('★ Favoriler', { k: 'fav' }, live.filter((i) => i.data.fav).length),
     h('h4', {}, 'Türler'),
@@ -572,7 +572,7 @@ function settingsView() {
         if (!confirm('Tüm parolalarınız şifresiz bir CSV dosyasına yazılacak. Devam?')) return;
         const lines = [['name', 'url', 'username', 'password', 'totp', 'note', 'type', 'vault'].join(',')];
         for (const i of liveItems()) lines.push([i.data.title, i.data.urls, i.data.username, i.data.password, i.data.totp, i.data.notes, i.data.type, vaultById(i.vid)?.name].map(csvCell).join(','));
-        const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })), download: 'kasa-export.csv' }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })), download: 'vaultly-export.csv' }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       } }, 'CSV indir')));
 }
 

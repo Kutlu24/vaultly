@@ -1,4 +1,4 @@
-"""Kasa - zero-knowledge team password manager (server).
+"""Vaultly - zero-knowledge team password manager (server).
 
 The server only ever stores ciphertext. All vault/item encryption happens in
 the browser (see web/crypto.js). The server enforces authentication, roles,
@@ -96,7 +96,7 @@ with db() as _c:
     except sqlite3.OperationalError:
         pass
 
-app = FastAPI(title="Kasa", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Vaultly", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.middleware("http")
