@@ -31,6 +31,8 @@ assert.equal((await call('GET', `/vaults/${v}/items`, null, b.j.token)).s, 404);
 // share with b as viewer
 const lk = (await call('GET', '/users/lookup?email=b@x.ch', null, a.j.token)).j;
 await call('POST', `/vaults/${v}/members`, { user_id: lk.id, role: 'viewer', wrapped_key: await C.wrapVaultKey(vk, lk.public_key) }, a.j.token);
+assert.equal((await call('GET', `/vaults/${v}/items`, null, b.j.token)).s, 404); console.log('ok pending invite grants no access');
+assert.equal((await call('POST', `/vaults/${v}/accept`, null, b.j.token)).s, 200);
 const bv = (await call('GET', '/vaults', null, b.j.token)).j[0]; const bk = await C.unwrapVaultKey(bv.wrapped_key, b.priv);
 assert.equal((await C.decJSON(bk, bv.enc_name)).name, 'Ekip');
 const bi = (await call('GET', `/vaults/${v}/items`, null, b.j.token)).j[0]; assert.equal((await C.decJSON(bk, bi.data)).password, 'S3cret!'); console.log('ok member decrypts shared item');

@@ -4,7 +4,7 @@ const $app = document.getElementById('app');
 const S = {
   token: null, user: null, master: null, priv: null,
   vaults: [], items: new Map(), view: { k: 'all' }, sel: null, q: '', edit: null,
-  pwned: new Map(), tick: null, idle: null,
+  pwned: new Map(), tick: null, idle: null, pending: [],
 };
 const TYPES = { login: 'Giriş', note: 'Not', card: 'Kart' };
 const ROLES = { owner: 'Sahip', editor: 'Düzenleyici', viewer: 'Görüntüleyici' };
@@ -135,12 +135,12 @@ async function createVault(name) {
 async function loadAll() {
   let list = await api('GET', '/vaults');
   if (!list.length) { await createVault('Kişisel'); list = await api('GET', '/vaults'); }
-  S.vaults = []; S.items = new Map();
-  await Promise.all(list.map(async (v) => {
+  S.vaults = []; S.items = new Map(); S.pending = list.filter((v) => v.status === 'pending');
+  await Promise.all(list.filter((v) => v.status !== 'pending').map(async (v) => {
     try {
       const key = await C.unwrapVaultKey(v.wrapped_key, S.priv);
       const name = (await C.decJSON(key, v.enc_name)).name;
-      S.vaults.push({ id: v.id, name, role: v.role, key, member_count: v.member_count });
+      S.vaults.push({ id: v.id, name, role: v.role, key, member_count: v.member_count, mine: !!v.mine, creator: v.creator });
       for (const it of await api('GET', `/vaults/${v.id}/items`)) {
         try { S.items.set(it.id, { id: it.id, vid: v.id, data: await C.decJSON(key, it.data), trashed: it.trashed, rev: it.rev, updated_at: it.updated_at }); }
         catch { /* undecryptable item: skipped */ }
@@ -184,7 +184,10 @@ function renderSide() {
     h('h4', {}, 'Türler'),
     ...Object.entries(TYPES).map(([t, l]) => nav(l, { k: 'type', t }, live.filter((i) => i.data.type === t).length)),
     h('h4', {}, 'Kasalar'),
-    ...S.vaults.map((x) => nav(x.name, { k: 'vault', id: x.id }, live.filter((i) => i.vid === x.id).length, x.member_count > 1 ? h('span', { class: 'count', title: x.member_count + ' üye' }, '👥') : null)),
+    ...S.vaults.map((x) => nav(x.name, { k: 'vault', id: x.id }, live.filter((i) => i.vid === x.id).length, x.member_count > 1 || !x.mine ? h('span', { class: 'count', title: (x.mine ? '' : 'Sahibi: ' + x.creator + ' · ') + x.member_count + ' üye' }, '👥') : null)),
+    ...S.pending.map((p) => h('div', { class: 'card' }, h('div', {}, '📨 Kasa daveti'), h('div', { class: 'muted' }, `${p.creator} sizi bir kasaya (${ROLES[p.role]}) eklemek istiyor. Kabul edene kadar içeriğe erişemez ve göremezsiniz.`),
+      h('div', { class: 'row' }, h('button', { class: 'small primary', onclick: async () => { try { await api('POST', `/vaults/${p.id}/accept`); await loadAll(); renderAll(); toast('Kasa eklendi'); } catch (e) { toast(errMsg(e)); } } }, 'Kabul'),
+        h('button', { class: 'small danger', onclick: async () => { try { await api('DELETE', `/vaults/${p.id}/members/${S.user.id}`); await loadAll(); renderAll(); } catch (e) { toast(errMsg(e)); } } }, 'Reddet')))),
     h('button', { class: 'nav', onclick: newVaultDialog }, h('span', { class: 'muted' }, '+ Yeni kasa')),
     h('h4', {}, 'Araçlar'),
     nav('Güvenlik Taraması', { k: 'monitor' }),
@@ -311,7 +314,7 @@ function newItem(type = 'login') {
   const writable = S.vaults.filter((v) => ['owner', 'editor'].includes(v.role) && v.key);
   if (!writable.length) return toast('Yazma yetkiniz olan kasa yok');
   if (['monitor', 'admin', 'settings'].includes(S.view.k)) S.view = { k: 'all' };
-  S.sel = null; S.edit = { item: null, type, vid: S.view.k === 'vault' && canWrite(S.view.id) ? S.view.id : writable[0].id }; renderAll();
+  S.sel = null; S.edit = { item: null, type, vid: S.view.k === 'vault' && canWrite(S.view.id) ? S.view.id : (writable.find((v) => v.mine) || writable[0]).id }; renderAll();
 }
 
 function editForm(ed) {
@@ -421,7 +424,7 @@ async function vaultDialog(v) {
     const email = h('input', { type: 'email', placeholder: 'Ekip arkadaşının e-postası' }); const role = h('select', {}, Object.entries(ROLES).map(([k, l]) => h('option', { value: k, selected: k === 'editor' }, l)));
     const found = h('div', { class: 'muted' });
     const table = h('table', {}, h('tr', {}, h('th', {}, 'Üye'), h('th', {}, 'Rol'), h('th')),
-      ...members.map((m) => h('tr', {}, h('td', {}, m.name, h('div', { class: 'muted' }, m.email)),
+      ...members.map((m) => h('tr', {}, h('td', {}, m.name, h('div', { class: 'muted' }, m.email + (m.status === 'pending' ? ' · davet bekliyor' : ''))),
         h('td', {}, owner ? h('select', { onchange: async (e) => { try { await api('PUT', `/vaults/${v.id}/members/${m.user_id}`, { role: e.target.value }); await loadAll(); draw(); renderAll(); } catch (x) { toast(errMsg(x)); draw(); } } },
           Object.entries(ROLES).map(([k, l]) => h('option', { value: k, selected: k === m.role }, l))) : ROLES[m.role]),
         h('td', {}, (owner || m.user_id === S.user.id) && h('button', { class: 'small danger', onclick: async () => {
@@ -440,7 +443,7 @@ async function vaultDialog(v) {
           const fp = await C.fingerprint(u.public_key);
           if (!confirm(`${u.name} <${u.email}>\nParmak izi: ${fp}\n\nBu kişiye kasa erişimi verilsin mi? (Parmak izini kişiyle doğrulayabilirsiniz.)`)) return;
           await api('POST', `/vaults/${v.id}/members`, { user_id: u.id, role: role.value, wrapped_key: await C.wrapVaultKey(v.key, u.public_key) });
-          await loadAll(); renderAll(); draw(); toast('Üye eklendi');
+          await loadAll(); renderAll(); draw(); toast('Davet gönderildi; kabul edince erişir');
         } catch (e) { found.textContent = errMsg(e); found.className = 'err'; }
       } }, 'Ekle'),
       h('h4', {}, 'Kasa ayarları'),

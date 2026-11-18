@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS members(
   vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('owner','editor','viewer')),
-  wrapped_key TEXT NOT NULL, PRIMARY KEY(vault_id,user_id));
+  wrapped_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', PRIMARY KEY(vault_id,user_id));
 CREATE TABLE IF NOT EXISTS items(
   id TEXT PRIMARY KEY, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
   data TEXT NOT NULL, trashed INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL DEFAULT 1,
@@ -87,6 +87,10 @@ def db():
 with db() as _c:
     _c.execute("PRAGMA journal_mode=WAL")
     _c.executescript(SCHEMA)
+    try:
+        _c.execute("ALTER TABLE members ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+    except sqlite3.OperationalError:
+        pass  # already present
 
 app = FastAPI(title="Kasa", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -124,7 +128,8 @@ def fail(key: str):
 
 
 def client_ip(request: Request) -> str:
-    return request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+    # uvicorn rewrites client.host from X-Forwarded-For only for trusted proxies (--forwarded-allow-ips)
+    return request.client.host if request.client else "?"
 
 
 def norm_email(e: str) -> str:
@@ -183,7 +188,7 @@ def admin_user(u=Depends(current_user)):
 
 
 def role_of(con, vault_id, user_id) -> Optional[str]:
-    r = con.execute("SELECT role FROM members WHERE vault_id=? AND user_id=?", (vault_id, user_id)).fetchone()
+    r = con.execute("SELECT role FROM members WHERE vault_id=? AND user_id=? AND status='active'", (vault_id, user_id)).fetchone()
     return r["role"] if r else None
 
 
@@ -286,6 +291,7 @@ def register(body: Register, request: Request):
     if "@" not in email:
         raise HTTPException(400, "Geçersiz e-posta")
     with db() as con:
+        con.execute("BEGIN IMMEDIATE")  # serialises first-admin bootstrap and invite claiming
         count = con.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
         if con.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
             raise HTTPException(409, "Bu e-posta zaten kayıtlı")
@@ -299,7 +305,10 @@ def register(body: Register, request: Request):
                     (uid, email, body.name.strip(), body.salt, body.iters, hash_auth(body.auth),
                      body.public_key, body.enc_private_key, 1 if count == 0 else 0, time.time()))
         if count > 0:
-            con.execute("UPDATE invites SET used_by=? WHERE code=?", (uid, body.invite))
+            claimed = con.execute("UPDATE invites SET used_by=? WHERE code=? AND used_by IS NULL AND expires>?",
+                                  (uid, body.invite, time.time()))
+            if claimed.rowcount != 1:
+                raise HTTPException(403, "Geçersiz veya süresi dolmuş davet kodu")
         log(con, uid, None, "user.register", email)
         u = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         return {"token": new_session(con, uid), "user": user_public(u)}
@@ -309,12 +318,13 @@ def register(body: Register, request: Request):
 def login(body: Login, request: Request):
     email = norm_email(body.email)
     key = "login:" + client_ip(request) + ":" + email
-    throttle(key)
+    acct = "acct:" + email  # per-account limit: rotating IPs does not reset it
+    throttle(key); throttle(acct, 20, 900)
     with db() as con:
         u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         ok = verify_auth(body.auth, u["auth_hash"] if u else DUMMY_HASH) and u is not None and not u["disabled"]
         if not ok:
-            fail(key)
+            fail(key); fail(acct)
             raise HTTPException(401, "E-posta veya ana parola hatalı")
         _fails.pop(key, None)
         log(con, u["id"], None, "user.login", client_ip(request))
@@ -423,8 +433,9 @@ def lookup(email: str, u=Depends(current_user)):
 def list_vaults(u=Depends(current_user)):
     with db() as con:
         rows = con.execute(
-            "SELECT v.id,v.enc_name,m.role,m.wrapped_key,"
-            "(SELECT COUNT(*) FROM members WHERE vault_id=v.id) AS member_count "
+            "SELECT v.id,v.enc_name,m.role,m.wrapped_key,m.status,(v.created_by=m.user_id) AS mine,"
+            "(SELECT email FROM users WHERE id=v.created_by) AS creator,"
+            "(SELECT COUNT(*) FROM members WHERE vault_id=v.id AND status='active') AS member_count "
             "FROM vaults v JOIN members m ON m.vault_id=v.id WHERE m.user_id=? ORDER BY v.created_at",
             (u["id"],)).fetchall()
     return [dict(r) for r in rows]
@@ -435,7 +446,7 @@ def create_vault(body: NewVault, u=Depends(current_user)):
     vid = uuid.uuid4().hex
     with db() as con:
         con.execute("INSERT INTO vaults VALUES(?,?,?,?)", (vid, body.enc_name, u["id"], time.time()))
-        con.execute("INSERT INTO members VALUES(?,?,'owner',?)", (vid, u["id"], body.wrapped_key))
+        con.execute("INSERT INTO members(vault_id,user_id,role,wrapped_key) VALUES(?,?,'owner',?)", (vid, u["id"], body.wrapped_key))
         log(con, u["id"], vid, "vault.create")
     return {"id": vid}
 
@@ -463,7 +474,7 @@ def members(vid: str, u=Depends(current_user)):
     with db() as con:
         need(con, vid, u)
         rows = con.execute(
-            "SELECT u.id user_id,u.email,u.name,u.public_key,m.role FROM members m JOIN users u ON u.id=m.user_id "
+            "SELECT u.id user_id,u.email,u.name,u.public_key,m.role,m.status FROM members m JOIN users u ON u.id=m.user_id "
             "WHERE m.vault_id=? ORDER BY u.email", (vid,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -474,14 +485,28 @@ def add_member(vid: str, body: AddMember, u=Depends(current_user)):
         need(con, vid, u, "owner")
         if not con.execute("SELECT 1 FROM users WHERE id=? AND disabled=0", (body.user_id,)).fetchone():
             raise HTTPException(404, "Kullanıcı bulunamadı")
-        con.execute("INSERT OR REPLACE INTO members VALUES(?,?,?,?)", (vid, body.user_id, body.role, body.wrapped_key))
-        log(con, u["id"], vid, "member.add", f"{body.user_id}:{body.role}")
+        if body.user_id == u["id"]:
+            raise HTTPException(400, "Zaten üyesiniz")
+        # invitee must accept before the vault key becomes usable / vault shows up in their account
+        con.execute("INSERT INTO members(vault_id,user_id,role,wrapped_key,status) VALUES(?,?,?,?,'pending')",
+                    (vid, body.user_id, body.role, body.wrapped_key))
+        log(con, u["id"], vid, "member.invite", f"{body.user_id}:{body.role}")
     return {"ok": True}
 
 
 def _last_owner(con, vid, uid):
     owners = [r["user_id"] for r in con.execute("SELECT user_id FROM members WHERE vault_id=? AND role='owner'", (vid,))]
     return owners == [uid]
+
+
+@app.post("/api/vaults/{vid}/accept")
+def accept_share(vid: str, u=Depends(current_user)):
+    with db() as con:
+        r = con.execute("UPDATE members SET status='active' WHERE vault_id=? AND user_id=? AND status='pending'", (vid, u["id"]))
+        if r.rowcount != 1:
+            raise HTTPException(404, "Bekleyen davet yok")
+        log(con, u["id"], vid, "member.accept")
+    return {"ok": True}
 
 
 @app.put("/api/vaults/{vid}/members/{uid}")
@@ -500,6 +525,10 @@ def remove_member(vid: str, uid: str, u=Depends(current_user)):
     """Removes the member. The client MUST then call /rotate so the removed
     member's copy of the vault key becomes useless for future data."""
     with db() as con:
+        if uid == u["id"] and con.execute("SELECT 1 FROM members WHERE vault_id=? AND user_id=? AND status='pending'", (vid, uid)).fetchone():
+            con.execute("DELETE FROM members WHERE vault_id=? AND user_id=?", (vid, uid))
+            log(con, u["id"], vid, "member.decline")
+            return {"ok": True}
         need(con, vid, u, *(() if uid == u["id"] else ("owner",)))
         if _last_owner(con, vid, uid):
             raise HTTPException(400, "Son sahip çıkarılamaz; önce kasayı silin veya başka sahip atayın")
