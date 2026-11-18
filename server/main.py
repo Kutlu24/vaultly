@@ -133,8 +133,16 @@ def fail(key: str, window: int = 300):
 
 
 def client_ip(request: Request) -> str:
-    # uvicorn rewrites client.host from X-Forwarded-For only for trusted proxies (--forwarded-allow-ips)
-    return request.client.host if request.client else "?"
+    """Real client IP. Without a reverse proxy: the socket peer. Behind KASA_PROXY_HOPS trusted proxies
+    that APPEND to X-Forwarded-For, take the hops-th entry from the RIGHT: everything left of it is
+    client-supplied and spoofable, the entries our own proxies appended are not."""
+    peer = request.client.host if request.client else "?"
+    hops = int(os.environ.get("KASA_PROXY_HOPS", "0") or 0)
+    if hops > 0:
+        parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        if len(parts) >= hops:
+            return parts[-hops]
+    return peer
 
 
 def norm_email(e: str) -> str:

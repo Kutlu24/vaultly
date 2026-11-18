@@ -3,7 +3,4 @@ services:
     build: .
     restart: unless-stopped
     ports: ["127.0.0.1:8011:8000"]   # put HTTPS in front (tailscale serve / Caddy); WebCrypto needs a secure context
-    environment:
-      # only the docker bridge / local proxy may set X-Forwarded-For (port is bound to 127.0.0.1)
-      FORWARDED_ALLOW_IPS: "127.0.0.1,172.16.0.0/12"
     volumes: ["./data:/data"]

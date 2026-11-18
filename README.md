@@ -32,3 +32,7 @@ KASA_DATA=./data uvicorn server.main:app --port 8000     # veya: docker compose 
 
 ## Render'a dağıtım
 `render.yaml` hazır (Starter plan + 1 GB kalıcı disk, tek örnek). GitHub'a push → Render'da "New → Blueprint". Disk yedekleri için Render'daki disk snapshot'larını açık tutun ve `secret.key` + `kasa.db` dosyalarını düzenli indirip güvenli bir yere kopyalayın.
+
+### Proxy / istemci IP'si
+`KASA_PROXY_HOPS` (varsayılan 0): önünüzde kaç güvenilir proxy var. 0 = soket adresi kullanılır. Render'da 1. Değer yanlışsa giriş sınırı bozulur:
+çok düşükse herkes proxy IP'si gibi görünür (sınır herkes için ortak dolar), çok yüksekse sahte IP kabul edilir. Dağıtımdan sonra kendi IP'nizle bir yanlış giriş deneyip sunucu günlüğünden doğrulayın.

@@ -10,9 +10,9 @@ services:
         value: /data
       - key: PORT
         value: "8000"
-      # Render's edge proxy is the only way to reach the service, so its X-Forwarded-For is trustworthy
-      - key: FORWARDED_ALLOW_IPS
-        value: "*"
+      # one trusted proxy hop that appends the real client IP to X-Forwarded-For (verify after deploy, see README)
+      - key: KASA_PROXY_HOPS
+        value: "1"
     disk:
       name: kasa-data
       mountPath: /data
