@@ -121,12 +121,13 @@ def throttle(key: str, limit: int = 8, window: int = 300):
     if time.time() - ts > window:
         n, ts = 0, time.time()
     if n >= limit:
-        raise HTTPException(429, "Çok fazla deneme. Birkaç dakika sonra tekrar deneyin.")
+        wait = max(1, int(window - (time.time() - ts)))
+        raise HTTPException(429, "Çok fazla deneme. Biraz sonra tekrar deneyin.", headers={"Retry-After": str(wait)})
 
 
-def fail(key: str):
+def fail(key: str, window: int = 300):
     n, ts = _fails.get(key, (0, time.time()))
-    if time.time() - ts > 300:
+    if time.time() - ts > window:
         n, ts = 0, time.time()
     _fails[key] = (n + 1, ts)
 
@@ -323,13 +324,13 @@ def login(body: Login, request: Request):
     email = norm_email(body.email)
     key = "login:" + client_ip(request) + ":" + email
     acct = "acct:" + email  # per-account limit: rotating IPs does not reset it
-    throttle(key)
-    time.sleep(min(0.5 * max(0, _fails.get(acct, (0, 0))[0] - 5), 8))  # progressive delay, never a hard lockout
+    throttle(key)                 # per IP+account: 8 failures / 5 min
+    throttle(acct, 30, 900)       # per account across all IPs: 30 failures / 15 min, then 429 + Retry-After (self-expiring)
     with db() as con:
         u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         ok = verify_auth(body.auth, u["auth_hash"] if u else DUMMY_HASH) and u is not None and not u["disabled"]
         if not ok:
-            fail(key); fail(acct)
+            fail(key); fail(acct, 900)
             raise HTTPException(401, "E-posta veya ana parola hatalı")
         _fails.pop(key, None); _fails.pop(acct, None)
         log(con, u["id"], None, "user.login", client_ip(request))
