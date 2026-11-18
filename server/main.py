@@ -132,11 +132,14 @@ def fail(key: str, window: int = 300):
     _fails[key] = (n + 1, ts)
 
 
-def _is_internal(ip: str) -> bool:
+def _trusted_proxy(ip: str) -> bool:
+    """Is the TCP peer one of our reverse proxies? KASA_TRUSTED_PROXIES = comma-separated CIDRs.
+    Default: loopback + private ranges (only our own proxy can reach the container there)."""
     import ipaddress
+    nets = os.environ.get("KASA_TRUSTED_PROXIES", "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7")
     try:
         a = ipaddress.ip_address(ip)
-        return a.is_loopback or a.is_private
+        return any(a in ipaddress.ip_network(n.strip(), strict=False) for n in nets.split(",") if n.strip())
     except ValueError:
         return False
 
@@ -147,7 +150,7 @@ def client_ip(request: Request) -> str:
     client-supplied and spoofable, the entries our own proxies appended are not."""
     peer = request.client.host if request.client else "?"
     hops = int(os.environ.get("KASA_PROXY_HOPS", "0") or 0)
-    if hops > 0 and _is_internal(peer):   # header is only meaningful when the TCP peer is our own proxy
+    if hops > 0 and _trusted_proxy(peer):   # header is only meaningful when the TCP peer is our own proxy
         parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
         if len(parts) >= hops:
             return parts[-hops]

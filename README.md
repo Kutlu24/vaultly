@@ -36,3 +36,5 @@ KASA_DATA=./data uvicorn server.main:app --port 8000     # veya: docker compose 
 ### Proxy / istemci IP'si
 `KASA_PROXY_HOPS` (varsayılan 0): önünüzde kaç güvenilir proxy var. 0 = soket adresi kullanılır. Render'da 1. Değer yanlışsa giriş sınırı bozulur:
 çok düşükse herkes proxy IP'si gibi görünür (sınır herkes için ortak dolar), çok yüksekse sahte IP kabul edilir. Dağıtımdan sonra kendi IP'nizle bir yanlış giriş deneyip sunucu günlüğünden doğrulayın.
+
+`KASA_TRUSTED_PROXIES`: `X-Forwarded-For` yalnızca bu CIDR listesinden gelen bağlantılarda okunur (varsayılan: loopback + özel ağlar). Mümkünse proxy'nizin tam adresine daraltın, örn. `172.17.0.1/32`.
