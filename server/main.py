@@ -122,7 +122,7 @@ def throttle(key: str, limit: int = 8, window: int = 300):
         n, ts = 0, time.time()
     if n >= limit:
         wait = max(1, int(window - (time.time() - ts)))
-        raise HTTPException(429, "Çok fazla deneme. Biraz sonra tekrar deneyin.", headers={"Retry-After": str(wait)})
+        raise HTTPException(429, "Too many attempts. Please try again shortly.", headers={"Retry-After": str(wait)})
 
 
 def fail(key: str, window: int = 300):
@@ -212,20 +212,20 @@ def user_public(u) -> dict:
 
 def current_user(authorization: str = Header(default="")):
     if not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Giriş gerekli")
+        raise HTTPException(401, "Sign-in required")
     th = hashlib.sha256(authorization[7:].encode()).hexdigest()
     with db() as con:
         row = con.execute(
             "SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id "
             "WHERE s.token_hash=? AND s.expires>? AND u.disabled=0", (th, time.time())).fetchone()
     if not row:
-        raise HTTPException(401, "Oturum süresi doldu")
+        raise HTTPException(401, "Session expired")
     return dict(row) | {"_th": th}
 
 
 def admin_user(u=Depends(current_user)):
     if not u["is_admin"]:
-        raise HTTPException(403, "Yönetici yetkisi gerekli")
+        raise HTTPException(403, "Administrator access required")
     return u
 
 
@@ -237,9 +237,9 @@ def role_of(con, vault_id, user_id) -> Optional[str]:
 def need(con, vault_id, user, *roles):
     r = role_of(con, vault_id, user["id"])
     if r is None:
-        raise HTTPException(404, "Kasa bulunamadı")
+        raise HTTPException(404, "Vault not found")
     if roles and r not in roles:
-        raise HTTPException(403, "Bu işlem için yetkiniz yok")
+        raise HTTPException(403, "You don't have permission to do this")
     return r
 
 
@@ -331,17 +331,17 @@ def register(body: Register, request: Request):
     fail("reg:" + client_ip(request))
     email = norm_email(body.email)
     if "@" not in email:
-        raise HTTPException(400, "Geçersiz e-posta")
+        raise HTTPException(400, "Invalid email")
     with db() as con:
         con.execute("BEGIN IMMEDIATE")  # serialises first-admin bootstrap and invite claiming
         count = con.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
         if con.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-            raise HTTPException(409, "Bu e-posta zaten kayıtlı")
+            raise HTTPException(409, "This email is already registered")
         if count > 0:
             inv = con.execute("SELECT * FROM invites WHERE code=? AND used_by IS NULL AND expires>?",
                               (body.invite or "", time.time())).fetchone()
             if not inv or (inv["email"] and inv["email"] != email):
-                raise HTTPException(403, "Geçersiz veya süresi dolmuş davet kodu")
+                raise HTTPException(403, "Invalid or expired invite code")
         uid = uuid.uuid4().hex
         con.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,0,?)",
                     (uid, email, body.name.strip(), body.salt, body.iters, hash_auth(body.auth),
@@ -350,7 +350,7 @@ def register(body: Register, request: Request):
             claimed = con.execute("UPDATE invites SET used_by=? WHERE code=? AND used_by IS NULL AND expires>?",
                                   (uid, body.invite, time.time()))
             if claimed.rowcount != 1:
-                raise HTTPException(403, "Geçersiz veya süresi dolmuş davet kodu")
+                raise HTTPException(403, "Invalid or expired invite code")
         log(con, uid, None, "user.register", email)
         u = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         return {"token": new_session(con, uid), "user": user_public(u)}
@@ -370,7 +370,7 @@ def login(body: Login, request: Request):
         ok = verify_auth(body.auth, u["auth_hash"] if u else DUMMY_HASH) and u is not None and not u["disabled"]
         if not ok:
             fail(key); fail(acct, 900)
-            raise HTTPException(401, "E-posta veya ana parola hatalı")
+            raise HTTPException(401, "Incorrect email or master password")
         _fails.pop(key, None); _fails.pop(acct, None)
         known = _known_ips.setdefault(email, {})
         known = {k: v for k, v in known.items() if v > time.time()}
@@ -393,7 +393,7 @@ def change_password(body: ChangePw, u=Depends(current_user)):
     throttle("pw:" + u["id"])
     if not verify_auth(body.old_auth, u["auth_hash"]):
         fail("pw:" + u["id"])
-        raise HTTPException(403, "Mevcut ana parola hatalı")
+        raise HTTPException(403, "Current master password is incorrect")
     with db() as con:
         con.execute("UPDATE users SET salt=?,iters=?,auth_hash=?,enc_private_key=? WHERE id=?",
                     (body.new_salt, body.new_iters, hash_auth(body.new_auth), body.enc_private_key, u["id"]))
@@ -414,7 +414,7 @@ def list_users(_=Depends(admin_user)):
 @app.post("/api/admin/users/{uid}/disable")
 def disable_user(uid: str, disable: bool = True, u=Depends(admin_user)):
     if uid == u["id"]:
-        raise HTTPException(400, "Kendinizi devre dışı bırakamazsınız")
+        raise HTTPException(400, "You cannot disable yourself")
     with db() as con:
         con.execute("UPDATE users SET disabled=? WHERE id=?", (1 if disable else 0, uid))
         if disable:
@@ -430,7 +430,7 @@ def disable_user(uid: str, disable: bool = True, u=Depends(admin_user)):
 def set_admin(uid: str, admin: bool, u=Depends(admin_user)):
     with db() as con:
         if not admin and con.execute("SELECT COUNT(*) c FROM users WHERE is_admin=1 AND disabled=0").fetchone()["c"] <= 1:
-            raise HTTPException(400, "En az bir yönetici kalmalı")
+            raise HTTPException(400, "At least one administrator must remain")
         con.execute("UPDATE users SET is_admin=? WHERE id=?", (1 if admin else 0, uid))
         log(con, u["id"], None, "user.admin" if admin else "user.unadmin", uid)
     return {"ok": True}
@@ -478,7 +478,7 @@ def lookup(email: str, u=Depends(current_user)):
         r = con.execute("SELECT id,email,name,public_key FROM users WHERE email=? AND disabled=0",
                         (norm_email(email),)).fetchone()
     if not r:
-        raise HTTPException(404, "Bu e-postayla kayıtlı kullanıcı yok (önce davet edin)")
+        raise HTTPException(404, "No user with this email (invite them first)")
     return dict(r)
 
 
@@ -539,9 +539,9 @@ def add_member(vid: str, body: AddMember, u=Depends(current_user)):
     with db() as con:
         need(con, vid, u, "owner")
         if not con.execute("SELECT 1 FROM users WHERE id=? AND disabled=0", (body.user_id,)).fetchone():
-            raise HTTPException(404, "Kullanıcı bulunamadı")
+            raise HTTPException(404, "User not found")
         if body.user_id == u["id"]:
-            raise HTTPException(400, "Zaten üyesiniz")
+            raise HTTPException(400, "You are already a member")
         # invitee must accept before the vault key becomes usable / vault shows up in their account
         con.execute("INSERT INTO members(vault_id,user_id,role,wrapped_key,status,invited_by) VALUES(?,?,?,?,'pending',?)",
                     (vid, body.user_id, body.role, body.wrapped_key, u["id"]))
@@ -559,7 +559,7 @@ def accept_share(vid: str, u=Depends(current_user)):
     with db() as con:
         r = con.execute("UPDATE members SET status='active' WHERE vault_id=? AND user_id=? AND status='pending'", (vid, u["id"]))
         if r.rowcount != 1:
-            raise HTTPException(404, "Bekleyen davet yok")
+            raise HTTPException(404, "No pending invitation")
         log(con, u["id"], vid, "member.accept")
     return {"ok": True}
 
@@ -569,7 +569,7 @@ def set_role(vid: str, uid: str, body: SetRole, u=Depends(current_user)):
     with db() as con:
         need(con, vid, u, "owner")
         if body.role != "owner" and _last_owner(con, vid, uid):
-            raise HTTPException(400, "Kasada en az bir sahip kalmalı")
+            raise HTTPException(400, "The vault must keep at least one owner")
         con.execute("UPDATE members SET role=? WHERE vault_id=? AND user_id=?", (body.role, vid, uid))
         log(con, u["id"], vid, "member.role", f"{uid}:{body.role}")
     return {"ok": True}
@@ -586,7 +586,7 @@ def remove_member(vid: str, uid: str, u=Depends(current_user)):
             return {"ok": True}
         need(con, vid, u, *(() if uid == u["id"] else ("owner",)))
         if _last_owner(con, vid, uid):
-            raise HTTPException(400, "Son sahip çıkarılamaz; önce kasayı silin veya başka sahip atayın")
+            raise HTTPException(400, "The last owner cannot be removed; delete the vault or assign another owner first")
         con.execute("DELETE FROM members WHERE vault_id=? AND user_id=?", (vid, uid))
         log(con, u["id"], vid, "member.remove", uid)
     return {"ok": True}
@@ -600,16 +600,16 @@ def rotate(vid: str, body: Rotate, u=Depends(current_user)):
         need(con, vid, u, "owner")
         cur = {r["user_id"] for r in con.execute("SELECT user_id FROM members WHERE vault_id=?", (vid,))}
         if set(body.wrapped_keys) != cur or set(body.expect_members) != cur:
-            raise HTTPException(409, "Üye listesi değişti, tekrar deneyin")
+            raise HTTPException(409, "Member list changed, please try again")
         ids = {r["id"] for r in con.execute("SELECT id FROM items WHERE vault_id=?", (vid,))}
         if {i["id"] for i in body.items} != ids:
-            raise HTTPException(409, "Kayıt listesi değişti, tekrar deneyin")
+            raise HTTPException(409, "Item list changed, please try again")
         con.execute("UPDATE vaults SET enc_name=? WHERE id=?", (body.enc_name, vid))
         for uid, wk in body.wrapped_keys.items():
             con.execute("UPDATE members SET wrapped_key=? WHERE vault_id=? AND user_id=?", (wk, vid, uid))
         for it in body.items:
             if len(it["data"]) > MAX_BLOB:
-                raise HTTPException(413, "Kayıt çok büyük")
+                raise HTTPException(413, "Item too large")
             con.execute("UPDATE items SET data=?, rev=rev+1 WHERE id=? AND vault_id=?", (it["data"], it["id"], vid))
         log(con, u["id"], vid, "vault.rotate")
     return {"ok": True}
@@ -645,9 +645,9 @@ def update_item(vid: str, iid: str, body: ItemIn, u=Depends(current_user)):
         need(con, vid, u, "owner", "editor")
         row = con.execute("SELECT * FROM items WHERE id=? AND vault_id=?", (iid, vid)).fetchone()
         if not row:
-            raise HTTPException(404, "Kayıt bulunamadı")
+            raise HTTPException(404, "Item not found")
         if body.rev is not None and body.rev != row["rev"]:
-            raise HTTPException(409, "Kayıt başkası tarafından değiştirildi; yenileyin")
+            raise HTTPException(409, "Item was changed by someone else; refresh")
         trashed = row["trashed"] if body.trashed is None else int(body.trashed)
         con.execute("UPDATE items SET data=?,trashed=?,rev=rev+1,updated_by=?,updated_at=? WHERE id=?",
                     (body.data, trashed, u["id"], time.time(), iid))
@@ -662,9 +662,9 @@ def delete_item(vid: str, iid: str, u=Depends(current_user)):
         need(con, vid, u, "owner", "editor")
         row = con.execute("SELECT trashed FROM items WHERE id=? AND vault_id=?", (iid, vid)).fetchone()
         if not row:
-            raise HTTPException(404, "Kayıt bulunamadı")
+            raise HTTPException(404, "Item not found")
         if not row["trashed"]:
-            raise HTTPException(400, "Önce çöp kutusuna taşıyın")
+            raise HTTPException(400, "Move it to the trash first")
         con.execute("DELETE FROM items WHERE id=?", (iid,))
         log(con, u["id"], vid, "item.delete", iid)
     return {"ok": True}
@@ -682,7 +682,7 @@ def vault_audit(vid: str, u=Depends(current_user)):
 
 @app.exception_handler(sqlite3.IntegrityError)
 def integrity(_, exc):
-    return JSONResponse({"detail": "Veri çakışması"}, status_code=409)
+    return JSONResponse({"detail": "Data conflict"}, status_code=409)
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

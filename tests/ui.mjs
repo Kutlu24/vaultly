@@ -16,13 +16,13 @@ await send('Runtime.enable'); await send('Log.enable'); await send('Page.navigat
 let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
 try {
   await waitFor(`!!document.querySelector('form.auth')`);
-  ok(/Yönetici hesabını/.test(await ev(`document.body.innerText`)), 'setup screen shown');
+  ok(/Create administrator account/.test(await ev(`document.body.innerText`)), 'setup screen shown');
   await setVal('input[type=email]', 'admin@ekip.ch'); await setVal('input[autocomplete=name]', 'Ada Admin');
   await ev(`(()=>{const p=document.querySelectorAll('input[type=password]');for(const x of p){x.value='ilk kurulum icin uzun parola 77';x.dispatchEvent(new Event('input',{bubbles:true}))}})()`);
   await ev(`document.querySelector('form.auth').requestSubmit()`);
   await waitFor(`!!document.querySelector('.shell')`);
   ok(true, 'registered and shell rendered');
-  ok(/Kişisel/.test(await ev(`document.querySelector('.side').innerText`)), 'personal vault auto-created');
+  ok(/Personal/.test(await ev(`document.querySelector('.side').innerText`)), 'personal vault auto-created');
   await ev(`document.querySelector('.toolbar .primary').click()`);
   await waitFor(`!!document.querySelector('.detail form')`);
   const names = await ev(`[...document.querySelectorAll('.detail form input')].length`); ok(names >= 5, 'edit form rendered');
@@ -33,17 +33,17 @@ try {
   ok(true, 'item saved + shown');
   await waitFor(`/\\d{3} \\d{3}/.test(document.querySelector('.totp')?.innerText||'')`); ok(true, 'live TOTP code displayed');
   ok(await ev(`document.querySelector('.items').innerText.includes('GitHub')`), 'item in list');
-  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Güvenlik')).click()`);
-  await waitFor(`document.querySelector('.detail h2')?.innerText==='Güvenlik Taraması'`); ok(true, 'monitor view');
-  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Yönetim')).click()`);
-  await waitFor(`document.querySelector('.detail').innerText.includes('Davet oluştur')`); ok(true, 'admin view');
-  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Ayarlar')).click()`);
-  await waitFor(`document.querySelector('.detail').innerText.includes('parmak izi')`); ok(true, 'settings view');
-  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Parola üretici')).click()`);
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Security')).click()`);
+  await waitFor(`document.querySelector('.detail h2')?.innerText==='Security Scan'`); ok(true, 'monitor view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Admin')).click()`);
+  await waitFor(`document.querySelector('.detail').innerText.includes('Create invite')`); ok(true, 'admin view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Settings')).click()`);
+  await waitFor(`document.querySelector('.detail').innerText.includes('fingerprint')`); ok(true, 'settings view');
+  await ev(`[...document.querySelectorAll('.nav')].find(b=>b.innerText.includes('Password generator')).click()`);
   await waitFor(`document.querySelector('dialog .genout')?.innerText.length>=20`); ok(true, 'generator dialog');
   await ev(`document.querySelector('dialog').close()`);
   // lock + re-login (proves data survives decrypt round trip)
-  await ev(`[...document.querySelectorAll('button')].find(b=>b.innerText.includes('Kilitle')).click()`);
+  await ev(`[...document.querySelectorAll('button')].find(b=>b.innerText.includes('Lock')).click()`);
   await waitFor(`!!document.querySelector('form.auth')`);
   await setVal('input[type=email]', 'admin@ekip.ch'); await setVal('input[type=password]', 'ilk kurulum icin uzun parola 77');
   await ev(`document.querySelector('form.auth').requestSubmit()`);

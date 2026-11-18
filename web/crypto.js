@@ -99,7 +99,7 @@ export function strength(pw) {
   if (/(.)\1{2,}/.test(pw) || /(012|123|234|345|456|567|678|789|abc|bcd|cde)/i.test(pw)) bits *= 0.75;
   bits = Math.round(bits);
   const level = bits < 40 ? 1 : bits < 60 ? 2 : bits < 80 ? 3 : 4;
-  return { bits, level, label: ['', 'Zayıf', 'Orta', 'Güçlü', 'Çok güçlü'][level] };
+  return { bits, level, label: ['', 'Weak', 'Fair', 'Strong', 'Very strong'][level] };
 }
 
 // ---- Have I Been Pwned (k-anonymity: only the first 5 SHA-1 hex chars leave the browser)
