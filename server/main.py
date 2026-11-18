@@ -152,6 +152,8 @@ def verify_auth(auth_b64: str, stored: str) -> bool:
     return hmac.compare_digest(hash_auth(auth_b64, base64.b64decode(salt_b64)), stored)
 
 
+_known_ips: dict = {}  # email -> IPs that logged in successfully (in memory; resets on restart)
+
 DUMMY_HASH = hash_auth("dummy")
 
 
@@ -325,7 +327,9 @@ def login(body: Login, request: Request):
     key = "login:" + client_ip(request) + ":" + email
     acct = "acct:" + email  # per-account limit: rotating IPs does not reset it
     throttle(key)                 # per IP+account: 8 failures / 5 min
-    throttle(acct, 30, 900)       # per account across all IPs: 30 failures / 15 min, then 429 + Retry-After (self-expiring)
+    ip = client_ip(request)
+    if ip not in _known_ips.get(email, ()):   # IPs that logged in before bypass the account-wide cap, so an outsider cannot lock you out
+        throttle(acct, 30, 900)       # per account across all IPs: 30 failures / 15 min, then 429 + Retry-After (self-expiring)
     with db() as con:
         u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         ok = verify_auth(body.auth, u["auth_hash"] if u else DUMMY_HASH) and u is not None and not u["disabled"]
@@ -333,6 +337,9 @@ def login(body: Login, request: Request):
             fail(key); fail(acct, 900)
             raise HTTPException(401, "E-posta veya ana parola hatalı")
         _fails.pop(key, None); _fails.pop(acct, None)
+        known = _known_ips.setdefault(email, set())
+        if len(known) < 10:
+            known.add(ip)
         log(con, u["id"], None, "user.login", client_ip(request))
         return {"token": new_session(con, u["id"]), "user": user_public(u)}
 
