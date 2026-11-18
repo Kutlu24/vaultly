@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: kasa
+    runtime: docker
+    plan: starter            # persistent disks are not available on the free plan
+    numInstances: 1          # SQLite: never scale beyond one instance
+    healthCheckPath: /api/status
+    envVars:
+      - key: KASA_DATA
+        value: /data
+      - key: PORT
+        value: "8000"
+      # Render's edge proxy is the only way to reach the service, so its X-Forwarded-For is trustworthy
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
+    disk:
+      name: kasa-data
+      mountPath: /data
+      sizeGB: 1

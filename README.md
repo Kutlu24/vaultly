@@ -29,3 +29,6 @@ KASA_DATA=./data uvicorn server.main:app --port 8000     # veya: docker compose 
 - Tarayıcı eklentisi / mobil uygulama / otomatik doldurma yok (sonraki adım).
 - Bir üye kasayı zaten açıp kopyaladıysa, çıkarılmadan önce gördüğü parolaları değiştirmek gerekir.
 - `data/secret.key` ve `kasa.db` yedeklenmeli.
+
+## Render'a dağıtım
+`render.yaml` hazır (Starter plan + 1 GB kalıcı disk, tek örnek). GitHub'a push → Render'da "New → Blueprint". Disk yedekleri için Render'daki disk snapshot'larını açık tutun ve `secret.key` + `kasa.db` dosyalarını düzenli indirip güvenli bir yere kopyalayın.
