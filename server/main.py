@@ -152,7 +152,19 @@ def verify_auth(auth_b64: str, stored: str) -> bool:
     return hmac.compare_digest(hash_auth(auth_b64, base64.b64decode(salt_b64)), stored)
 
 
-_known_ips: dict = {}  # email -> IPs that logged in successfully (in memory; resets on restart)
+_known_ips: dict = {}  # email -> {ip: expiry}; in memory, resets on restart
+KNOWN_TTL = 14 * 86400
+
+
+def is_known_ip(email: str, ip: str) -> bool:
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+        if a.is_loopback or a.is_private:   # could be our own reverse proxy: never trust as a device identity
+            return False
+    except ValueError:
+        return False
+    return _known_ips.get(email, {}).get(ip, 0) > time.time()
 
 DUMMY_HASH = hash_auth("dummy")
 
@@ -328,7 +340,7 @@ def login(body: Login, request: Request):
     acct = "acct:" + email  # per-account limit: rotating IPs does not reset it
     throttle(key)                 # per IP+account: 8 failures / 5 min
     ip = client_ip(request)
-    if ip not in _known_ips.get(email, ()):   # IPs that logged in before bypass the account-wide cap, so an outsider cannot lock you out
+    if not is_known_ip(email, ip):   # IPs that logged in before bypass the account-wide cap, so an outsider cannot lock you out
         throttle(acct, 30, 900)       # per account across all IPs: 30 failures / 15 min, then 429 + Retry-After (self-expiring)
     with db() as con:
         u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
@@ -337,9 +349,11 @@ def login(body: Login, request: Request):
             fail(key); fail(acct, 900)
             raise HTTPException(401, "E-posta veya ana parola hatalı")
         _fails.pop(key, None); _fails.pop(acct, None)
-        known = _known_ips.setdefault(email, set())
-        if len(known) < 10:
-            known.add(ip)
+        known = _known_ips.setdefault(email, {})
+        known = {k: v for k, v in known.items() if v > time.time()}
+        if len(known) < 10 or ip in known:
+            known[ip] = time.time() + KNOWN_TTL
+        _known_ips[email] = known
         log(con, u["id"], None, "user.login", client_ip(request))
         return {"token": new_session(con, u["id"]), "user": user_public(u)}
 
@@ -361,6 +375,7 @@ def change_password(body: ChangePw, u=Depends(current_user)):
         con.execute("UPDATE users SET salt=?,iters=?,auth_hash=?,enc_private_key=? WHERE id=?",
                     (body.new_salt, body.new_iters, hash_auth(body.new_auth), body.enc_private_key, u["id"]))
         con.execute("DELETE FROM sessions WHERE user_id=? AND token_hash!=?", (u["id"], u["_th"]))
+        _known_ips.pop(u["email"], None)
         log(con, u["id"], None, "user.password_change")
     return {"ok": True}
 
@@ -381,6 +396,9 @@ def disable_user(uid: str, disable: bool = True, u=Depends(admin_user)):
         con.execute("UPDATE users SET disabled=? WHERE id=?", (1 if disable else 0, uid))
         if disable:
             con.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            row = con.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+            if row:
+                _known_ips.pop(row["email"], None)
         log(con, u["id"], None, "user.disable" if disable else "user.enable", uid)
     return {"ok": True}
 
