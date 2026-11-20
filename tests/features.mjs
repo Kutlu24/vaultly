@@ -36,7 +36,7 @@ r = await call('POST', '/login', { email: 'admin@t.org', auth, code: en.j.recove
 assert.equal(r.s, 200); ok('recovery code works');
 assert.equal((await call('POST', '/login', { email: 'admin@t.org', auth, code: en.j.recovery_codes[0] })).s, 401); ok('recovery code is single-use');
 assert.equal((await call('GET', '/2fa/status', null, A)).j.recovery_left, 7);
-assert.equal((await call('POST', '/admin/users/' + a.j.user.id + '/reset-2fa', null, Bt)).s, 403); ok('non-admin cannot reset 2FA');
+assert.equal((await call('POST', '/admin/users/' + a.j.user.id + '/reset-2fa', { auth: 'z'.repeat(44) }, Bt)).s, 403); ok('non-admin cannot reset 2FA');
 
 // ---- sessions + activity
 const sess = (await call('GET', '/account/sessions', null, A2)).j;
@@ -52,9 +52,18 @@ assert.equal((await call('DELETE', '/account/sessions/zz', null, Bt)).s, 400);
 // admin resets member? (member has no 2FA) -> admin resets own? use member: turn on, then admin resets
 const authB = (await keys('member@t.org', PW2)).auth;
 const sB = (await call('POST', '/2fa/setup', { auth: authB }, Bt)).j; await call('POST', '/2fa/enable', { code: (await C.totp(sB.secret)).code }, Bt);
-assert.equal((await call('POST', '/admin/users/' + b.j.user.id + '/reset-2fa', null, A2)).s, 200);
+assert.equal((await call('POST', '/admin/users/' + b.j.user.id + '/reset-2fa', { auth: 'q'.repeat(44) }, A2)).s, 403); ok('admin reset needs the admin master password');
+assert.equal((await call('POST', '/admin/users/' + b.j.user.id + '/reset-2fa', { auth }, A2)).s, 200);
+assert.ok((await call('GET', '/account/activity', null, (await call('POST', '/login', { email: 'member@t.org', auth: authB })).j.token)).j.some((x) => x.action === 'user.2fa_reset_by_admin')); ok('member sees the reset in their activity');
 assert.equal((await call('GET', '/vaults', null, Bt)).s, 401); // admin reset also signs the member out
 const Bt2 = (await call('POST', '/login', { email: 'member@t.org', auth: authB })).j.token; assert.ok(Bt2); ok('admin 2FA reset (member signs in without code)');
+// persistent 2FA lockout: 5 wrong codes lock the code check for 15 min even with the right password, from any IP
+const sB2 = (await call('POST', '/2fa/setup', { auth: authB }, Bt2)).j; await call('POST', '/2fa/enable', { code: (await C.totp(sB2.secret)).code }, Bt2);
+for (let i = 0; i < 5; i++) await call('POST', '/login', { email: 'member@t.org', auth: authB, code: String(100000 + i) });
+const lockedTry = await call('POST', '/login', { email: 'member@t.org', auth: authB, code: (await C.totp(sB2.secret, Date.now() + 30000)).code });
+assert.ok([429].includes(lockedTry.s)); ok('2FA locks after 5 wrong codes');
+assert.equal((await call('POST', '/admin/users/' + b.j.user.id + '/reset-2fa', { auth }, A2)).s, 200);   // admin reset also clears the lock
+const Bt3 = (await call('POST', '/login', { email: 'member@t.org', auth: authB })).j.token; assert.ok(Bt3);
 assert.equal((await call('POST', '/2fa/disable', { auth: 'y'.repeat(44) }, A2)).s, 403);
 assert.equal((await call('POST', '/2fa/disable', { auth }, A2)).s, 200); ok('disable needs the master password');
 
@@ -67,7 +76,8 @@ r = await call('POST', `/send/${sid}/access`, { password: 'pin1234' });
 assert.equal(r.s, 200); assert.equal(r.j.views_left, 1); assert.equal((await C.sendDecrypt(r.j.enc, key)).text, 'wifi: hunter2'); ok('Send decrypts with the fragment key');
 await assert.rejects(C.sendDecrypt(r.j.enc, C.b64url(new Uint8Array(32)))); ok('wrong key cannot decrypt');
 const mine = (await call('GET', '/sends', null, A2)).j; assert.equal(mine[0].note, 'for accountant'); assert.equal(mine[0].views, 1); assert.ok(!('enc' in mine[0]));
-await call('DELETE', '/sends/' + sid, null, Bt2); assert.equal((await call('GET', '/send/' + sid)).s, 200); ok('others cannot delete my Send');
+const actA = (await call('GET', '/account/activity', null, A2)).j.filter((x) => x.action.startsWith('user.send')); assert.ok(actA.every((x) => !x.detail.includes(sid))); ok('Send ids are not written to the log');
+await call('DELETE', '/sends/' + sid, null, Bt3); assert.equal((await call('GET', '/send/' + sid)).s, 200); ok('others cannot delete my Send');
 assert.equal((await call('POST', `/send/${sid}/access`, { password: 'pin1234' })).s, 200);
 assert.equal((await call('POST', `/send/${sid}/access`, { password: 'pin1234' })).s, 404); ok('view limit enforced');
 const s2 = (await call('POST', '/sends', { enc, expire_hours: 1 }, A2)).j.id;
@@ -88,10 +98,10 @@ const i2 = (await call('POST', `/vaults/${vid}/items`, { data: await C.encJSON(v
 let snaps = (await call('GET', `/vaults/${vid}/snapshots`, null, A2)).j; assert.equal(snaps.length, 1); assert.equal(snaps[0].count, 1);
 // editor "vandalism": add member B as editor, B trashes + deletes Bank
 await call('POST', `/vaults/${vid}/members`, { user_id: b.j.user.id, role: 'editor', wrapped_key: await C.wrapVaultKey(vk, b.j.user.public_key) }, A2);
-await call('POST', `/vaults/${vid}/accept`, null, Bt2);
-const t = await call('PUT', `/vaults/${vid}/items/${i1.id}`, { data: i1.data, rev: i1.rev, trashed: true }, Bt2); assert.equal(t.s, 200);
-assert.equal((await call('DELETE', `/vaults/${vid}/items/${i1.id}`, null, Bt2)).s, 200);
-assert.equal((await call('GET', `/vaults/${vid}/snapshots`, null, Bt2)).s, 403); ok('only owners see snapshots');
+await call('POST', `/vaults/${vid}/accept`, null, Bt3);
+const t = await call('PUT', `/vaults/${vid}/items/${i1.id}`, { data: i1.data, rev: i1.rev, trashed: true }, Bt3); assert.equal(t.s, 200);
+assert.equal((await call('DELETE', `/vaults/${vid}/items/${i1.id}`, null, Bt3)).s, 200);
+assert.equal((await call('GET', `/vaults/${vid}/snapshots`, null, Bt3)).s, 403); ok('only owners see snapshots');
 r = await call('POST', `/vaults/${vid}/snapshots/${snaps[0].id}/restore`, null, A2);
 assert.equal(r.s, 200); assert.equal(r.j.restored, 1);
 const items = (await call('GET', `/vaults/${vid}/items`, null, A2)).j;

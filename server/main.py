@@ -104,7 +104,7 @@ with db() as _c:
     except sqlite3.OperationalError:
         pass
     for _t, _col, _ddl in (("users", "totp_secret", "TEXT"), ("users", "totp_pending", "TEXT"), ("users", "totp_last", "INTEGER NOT NULL DEFAULT 0"),
-                           ("users", "recovery", "TEXT"), ("sessions", "created", "REAL"), ("sessions", "last_seen", "REAL"),
+                           ("users", "recovery", "TEXT"), ("users", "totp_fails", "INTEGER NOT NULL DEFAULT 0"), ("users", "totp_locked_until", "REAL NOT NULL DEFAULT 0"), ("sessions", "created", "REAL"), ("sessions", "last_seen", "REAL"),
                            ("sessions", "ip", "TEXT"), ("sessions", "agent", "TEXT"), ("vaults", "key_version", "INTEGER NOT NULL DEFAULT 1")):
         if _col not in {r[1] for r in _c.execute(f"PRAGMA table_info({_t})")}:
             _c.execute(f"ALTER TABLE {_t} ADD COLUMN {_col} {_ddl}")
@@ -258,15 +258,14 @@ def check_second_factor(con, u, code: str) -> bool:
     code = (code or "").strip().replace(" ", "")
     if code.isdigit() and len(code) == 6:
         c = totp_match(u["totp_secret"], code, u["totp_last"] or 0)
-        if c is not None:
-            con.execute("UPDATE users SET totp_last=? WHERE id=?", (c, u["id"]))
-            return True
-        return False
+        # conditional update: two parallel logins with the same code cannot both succeed
+        return c is not None and con.execute("UPDATE users SET totp_last=? WHERE id=? AND totp_last<?", (c, u["id"], c)).rowcount == 1
     hashes = json.loads(u["recovery"] or "[]")
     h = recovery_hash(code)
     if h in hashes:
         hashes.remove(h)
-        con.execute("UPDATE users SET recovery=? WHERE id=?", (json.dumps(hashes), u["id"]))
+        if con.execute("UPDATE users SET recovery=? WHERE id=? AND recovery=?", (json.dumps(hashes), u["id"], u["recovery"])).rowcount != 1:
+            return False   # used by a parallel request
         log(con, u["id"], None, "user.2fa_recovery_used", f"{len(hashes)} left")
         return True
     return False
@@ -448,11 +447,20 @@ def login(body: Login, request: Request):
         if u["totp_secret"]:
             if not body.code:
                 raise HTTPException(401, "2FA_REQUIRED")   # the client then asks for the code and sends everything again
+            now = time.time()
+            if u["totp_locked_until"] > now:   # persistent, per account: a correct master password does not reset it
+                raise HTTPException(429, "Too many wrong two-factor codes. Try again later.", headers={"Retry-After": str(int(u["totp_locked_until"] - now) + 1)})
+            con.execute("BEGIN IMMEDIATE")   # serialise code checks for this login
             if not check_second_factor(con, u, body.code):
                 fail(key); fail(acct, 900)
+                n = con.execute("UPDATE users SET totp_fails=totp_fails+1 WHERE id=? RETURNING totp_fails", (u["id"],)).fetchone()[0]
+                if n >= 5:
+                    con.execute("UPDATE users SET totp_fails=0, totp_locked_until=? WHERE id=?", (now + 900, u["id"]))
+                    log(con, u["id"], None, "user.2fa_locked", "15 min after 5 wrong codes")
                 log(con, u["id"], None, "user.login_failed", client_ip(request) + " (wrong 2FA code)")
                 con.commit()
                 raise HTTPException(401, "Incorrect two-factor code")
+            con.execute("UPDATE users SET totp_fails=0 WHERE id=?", (u["id"],))
         _fails.pop(key, None); _fails.pop(acct, None)
         known = _known_ips.setdefault(email, {})
         known = {k: v for k, v in known.items() if v > time.time()}
@@ -622,14 +630,19 @@ def set_admin(uid: str, admin: bool, u=Depends(admin_user)):
 
 
 @app.post("/api/admin/users/{uid}/reset-2fa")
-def admin_reset_2fa(uid: str, u=Depends(admin_user)):
-    """For a member who lost both phone and recovery codes. Their data stays protected by the master password."""
+def admin_reset_2fa(uid: str, body: AuthOnly, u=Depends(admin_user)):
+    """For a member who lost both phone and recovery codes. Their data stays protected by the master password.
+    Needs the admin's own master password (a stolen admin session alone cannot strip someone's 2FA)."""
+    reverify(u, body.auth)
+    if uid == u["id"]:
+        raise HTTPException(400, "Turn off your own 2FA in Settings")
     with db() as con:
-        n = con.execute("UPDATE users SET totp_secret=NULL, totp_pending=NULL, recovery=NULL WHERE id=?", (uid,)).rowcount
+        n = con.execute("UPDATE users SET totp_secret=NULL, totp_pending=NULL, recovery=NULL, totp_fails=0, totp_locked_until=0 WHERE id=?", (uid,)).rowcount
         if not n:
             raise HTTPException(404, "User not found")
         con.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
-        log(con, u["id"], None, "user.2fa_reset_by_admin", uid)
+        log(con, u["id"], None, "admin.2fa_reset", uid)
+        log(con, uid, None, "user.2fa_reset_by_admin", u["email"])   # shows in the member's own activity
     return {"ok": True}
 
 
@@ -964,6 +977,11 @@ class SendAccess(BaseModel):
     password: str = Field(default="", max_length=200)
 
 
+def send_ref(sid: str) -> str:
+    """Non-usable reference for logs (the id is part of the link)."""
+    return hashlib.sha256(sid.encode()).hexdigest()[:10]
+
+
 def send_pw_hash(pw: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 200_000).hex()
 
@@ -986,7 +1004,7 @@ def create_send(body: SendIn, u=Depends(current_user)):
         con.execute("INSERT INTO sends(id,user_id,enc,size,created,expires,max_views,pw_salt,pw_hash,note) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (sid, u["id"], body.enc, size, time.time(), time.time() + body.expire_hours * 3600, body.max_views, salt,
                      send_pw_hash(body.password, salt) if body.password else None, body.note.strip()))
-        log(con, u["id"], None, "user.send_create", sid)
+        log(con, u["id"], None, "user.send_create", send_ref(sid))
     return {"id": sid}
 
 
@@ -1043,7 +1061,7 @@ def send_access(sid: str, body: SendAccess, request: Request):
         cur = con.execute("UPDATE sends SET views=views+1, fails=0 WHERE id=? AND expires>? AND (max_views IS NULL OR views<max_views)", (sid, now))
         if cur.rowcount != 1:
             raise HTTPException(404, "This link does not exist, has expired or was already used up.")
-        log(con, r["user_id"], None, "user.send_opened", sid)
+        log(con, r["user_id"], None, "user.send_opened", send_ref(sid))
     left = None if r["max_views"] is None else r["max_views"] - r["views"] - 1
     return {"enc": r["enc"], "views_left": left, "expires": r["expires"]}
 
