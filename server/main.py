@@ -447,16 +447,17 @@ def login(body: Login, request: Request):
         if u["totp_secret"]:
             if not body.code:
                 raise HTTPException(401, "2FA_REQUIRED")   # the client then asks for the code and sends everything again
+            con.execute("BEGIN IMMEDIATE")   # serialise code checks; everything below uses a fresh row read under the lock
+            u = con.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone()
             now = time.time()
             if u["totp_locked_until"] > now:   # persistent, per account: a correct master password does not reset it
                 raise HTTPException(429, "Too many wrong two-factor codes. Try again later.", headers={"Retry-After": str(int(u["totp_locked_until"] - now) + 1)})
-            con.execute("BEGIN IMMEDIATE")   # serialise code checks for this login
             if not check_second_factor(con, u, body.code):
                 fail(key); fail(acct, 900)
                 n = con.execute("UPDATE users SET totp_fails=totp_fails+1 WHERE id=? RETURNING totp_fails", (u["id"],)).fetchone()[0]
-                if n >= 5:
-                    con.execute("UPDATE users SET totp_fails=0, totp_locked_until=? WHERE id=?", (now + 900, u["id"]))
-                    log(con, u["id"], None, "user.2fa_locked", "15 min after 5 wrong codes")
+                if n % 5 == 0:   # every 5th wrong code since the last correct one locks again (the counter is only reset by success)
+                    con.execute("UPDATE users SET totp_locked_until=? WHERE id=?", (now + 900, u["id"]))
+                    log(con, u["id"], None, "user.2fa_locked", f"15 min after {n} wrong codes")
                 log(con, u["id"], None, "user.login_failed", client_ip(request) + " (wrong 2FA code)")
                 con.commit()
                 raise HTTPException(401, "Incorrect two-factor code")

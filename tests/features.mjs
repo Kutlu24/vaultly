@@ -62,6 +62,8 @@ const sB2 = (await call('POST', '/2fa/setup', { auth: authB }, Bt2)).j; await ca
 for (let i = 0; i < 5; i++) await call('POST', '/login', { email: 'member@t.org', auth: authB, code: String(100000 + i) });
 const lockedTry = await call('POST', '/login', { email: 'member@t.org', auth: authB, code: (await C.totp(sB2.secret, Date.now() + 30000)).code });
 assert.ok([429].includes(lockedTry.s)); ok('2FA locks after 5 wrong codes');
+const par = await Promise.all(Array.from({ length: 8 }, (_, i) => call('POST', '/login', { email: 'member@t.org', auth: authB, code: String(200000 + i) })));
+assert.ok(par.every((x) => x.s === 429)); ok('parallel attempts during the lock are all refused');
 assert.equal((await call('POST', '/admin/users/' + b.j.user.id + '/reset-2fa', { auth }, A2)).s, 200);   // admin reset also clears the lock
 const Bt3 = (await call('POST', '/login', { email: 'member@t.org', auth: authB })).j.token; assert.ok(Bt3);
 assert.equal((await call('POST', '/2fa/disable', { auth: 'y'.repeat(44) }, A2)).s, 403);
