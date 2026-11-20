@@ -45,7 +45,7 @@ try {
   const loaded = await pipeSend('Extensions.loadUnpacked', { path: ext });
   assert.ok(loaded.result?.id, 'loadUnpacked: ' + JSON.stringify(loaded.error || loaded)); const EXT = loaded.result.id; ok('extension loaded ' + EXT);
   await sleep(1000);
-  const page = async (url) => { const t = await (await fetch('http://127.0.0.1:9334/json/new?' + url, { method: 'PUT' })).json(); const ws = new WebSocket(t.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r)); let n = 0; const pend = new Map(); ws.onmessage = (m) => { const j = JSON.parse(m.data); if (pend.has(j.id)) pend.get(j.id)(j); }; const send = (method, params = {}) => new Promise((r) => { const i = ++n; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); }); const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true }); if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'eval error'); return r.result.result.value; }; return { ev, nav: (u) => send('Page.navigate', { url: u }), close: () => ws.close() }; };
+  const page = async (url) => { const t = await (await fetch('http://127.0.0.1:9334/json/new?' + url, { method: 'PUT' })).json(); const ws = new WebSocket(t.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r)); let n = 0; const pend = new Map(); ws.onmessage = (m) => { const j = JSON.parse(m.data); if (pend.has(j.id)) pend.get(j.id)(j); }; const send = (method, params = {}) => new Promise((r) => { const i = ++n; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); }); const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true }); if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'eval error'); return r.result.result.value; }; return { ev, send, nav: (u) => send('Page.navigate', { url: u }), close: () => ws.close() }; };
   const waitFor = async (pg, expr, ms = 20000) => { const t = Date.now(); while (Date.now() - t < ms) { try { if (await pg.ev(expr)) return; } catch { /* page loading */ } await sleep(200); } let body = ''; try { body = await pg.ev(`document.body.innerText.slice(0,300) + ' | ' + location.href`); } catch (e) { body = 'eval failed: ' + e.message; } throw new Error('timeout: ' + expr + '\n  page: ' + body); };
   const site1 = await page(SITE + '/login'); await waitFor(site1, `!!document.getElementById('pw')`);
   const pop = await page('about:blank'); await pop.nav(`chrome-extension://${EXT}/popup.html`);
@@ -65,6 +65,20 @@ try {
   await waitFor(pop, `[...document.querySelectorAll('button')].some(b=>b.textContent==='Filled ✓')`);
   const vals = await site1.ev(`[document.getElementById('email').value, document.getElementById('pw').value, document.getElementById('otp').value]`);
   assert.deepEqual(vals, ['anna@t.org', 'S3cret-from-vault', '']); ok('page filled with decrypted username + password (nothing else)');
+  await pipeSend('Browser.grantPermissions', { origin: `chrome-extension://${EXT}`, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
+  await pop.send('Emulation.setFocusEmulationEnabled', { enabled: true });   // headless pages are never focused; the clipboard API needs focus
+  await pop.ev(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Password').click()`); await sleep(800);
+  const pwBtn = await pop.ev(`[...document.querySelectorAll('button')].map(b=>b.textContent).filter(t=>/Copied|Blocked|Password/.test(t)).join(',')`);
+  if (!/Copied/.test(pwBtn)) console.log('  (clipboard state: ' + pwBtn + ')');
+  assert.ok(await pop.ev(`chrome.alarms.get('clear-clipboard').then(a=>!!a)`)); ok('copying a password schedules clipboard clearing in the service worker');
+  assert.equal(await pop.ev(`navigator.clipboard.readText()`), 'S3cret-from-vault');
+  await sleep(33000);
+  assert.notEqual((await pop.ev(`navigator.clipboard.readText()`)).trim(), 'S3cret-from-vault'.trim()); ok('the password is gone from the clipboard after 30 s');
+  // the tab navigates to another host after the popup read its URL: the fill must refuse
+  await site1.ev(`location.href='http://localhost:8098/login'`); await sleep(1200);
+  await pop.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='Filled ✓');b.textContent='Fill';b.click();return 1})()`);
+  await waitFor(pop, `[...document.querySelectorAll('button')].some(b=>b.textContent==='Page changed, not filled')`);
+  assert.equal(await site1.ev(`document.getElementById('pw').value`), ''); ok('a tab that moved to another site gets nothing');
   const stored = await pop.ev(`chrome.storage.session.get('sess').then(x=>JSON.stringify(x))`);
   assert.ok(!stored.includes(PW) && !stored.includes('S3cret')); ok('session storage holds no master password or item secrets');
   const local = await pop.ev(`chrome.storage.local.get(null).then(x=>JSON.stringify(x))`);

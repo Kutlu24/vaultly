@@ -142,6 +142,10 @@ assert.equal((await call('DELETE', `/vaults/${v2}/attachments/${aid}`, null, Bt3
 assert.equal((await call('DELETE', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 200);
 assert.equal((await rawCall('GET', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 200); ok('deleted files stay restorable (snapshot window)');
 assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${'ef'.repeat(16)}`, new Uint8Array(26 * 1024 * 1024), A2)).s, 413); ok('25 MB limit');
+if (process.env.KASA_ATT_USER_MB === '1') {   // run with the server started with KASA_ATT_USER_MB=1
+  assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${'01'.repeat(16)}`, new Uint8Array(600 * 1024), A2)).s, 200);
+  assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${'02'.repeat(16)}`, new Uint8Array(600 * 1024), A2)).s, 413); ok('per-user file quota');
+}
 await call('DELETE', `/vaults/${v2}`, null, A2);
 assert.equal((await rawCall('GET', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 404); ok('vault delete removes its files');
 

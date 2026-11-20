@@ -906,6 +906,7 @@ ATT_DIR.mkdir(exist_ok=True)
 MAX_ATT = 25 * 1024 * 1024
 ATT_VAULT_QUOTA = int(os.environ.get("KASA_ATT_VAULT_MB", "300")) * 1024 * 1024
 ATT_TOTAL_QUOTA = int(os.environ.get("KASA_ATT_TOTAL_MB", "600")) * 1024 * 1024
+ATT_USER_QUOTA = int(os.environ.get("KASA_ATT_USER_MB", "150")) * 1024 * 1024   # one member cannot fill the shared disk
 ATT_KEEP_DELETED = 15 * 86400
 import re as _re
 ATT_ID = _re.compile(r"^[0-9a-f]{32}$")
@@ -943,6 +944,9 @@ async def put_attachment(vid: str, aid: str, request: Request, u=Depends(current
             raise HTTPException(409, "Attachment id already used")
         in_vault = con.execute("SELECT COALESCE(SUM(size),0) n FROM attachments WHERE vault_id=?", (vid,)).fetchone()["n"]
         total = con.execute("SELECT COALESCE(SUM(size),0) n FROM attachments").fetchone()["n"]
+        mine = con.execute("SELECT COALESCE(SUM(size),0) n FROM attachments WHERE created_by=?", (u["id"],)).fetchone()["n"]
+        if mine + len(body) > ATT_USER_QUOTA:
+            raise HTTPException(413, f"You have used your file storage ({ATT_USER_QUOTA >> 20} MB); delete old attachments first (deleted files count for 15 days)")
         if in_vault + len(body) > ATT_VAULT_QUOTA or total + len(body) > ATT_TOTAL_QUOTA:
             raise HTTPException(413, "File storage is full; delete old attachments first")
         p.write_bytes(bytes(body))

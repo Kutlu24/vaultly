@@ -1,5 +1,6 @@
 // Runs inside the page (injected with chrome.scripting.executeScript). Must stay self-contained.
-export function fillForm(username, password) {
+export function fillForm(username, password, expectedHost) {
+  if (!expectedHost || location.hostname.toLowerCase().replace(/^www\./, '') !== expectedHost) return -1;   // page is not the approved site (any more)
   const visible = (e) => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !e.disabled && !e.readOnly; };
   const set = (e, v) => {
     const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;

@@ -121,7 +121,7 @@ const matches = (d) => !!tab?.url && urlsOf(d).some((u) => urlMatches(tab.url, u
 async function copyFor(text, btn, label, clearAfter) {
   try { await navigator.clipboard.writeText(text); } catch { btn.textContent = 'Blocked'; return; }
   btn.textContent = label;
-  if (clearAfter) setTimeout(async () => { try { if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText(''); } catch { /* popup closed */ } }, 30000);
+  if (clearAfter) chrome.runtime.sendMessage({ type: 'clear-clipboard-later' });   // survives the popup closing
 }
 
 function show(q) {
@@ -137,8 +137,11 @@ function show(q) {
         h('button', { class: 'pri', title: ok ? 'Fill username and password on this page' : 'Saved for a different site', onclick: async (e) => {
           if (!ok && !confirm(`This login is saved for:\n${urlsOf(d)[0] || '(no website)'}\n\nYou are on ${host || 'an unknown page'}. Fill anyway?`)) return;
           try {
-            const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: fillForm, args: [d.username || '', d.password || ''] });
-            e.target.textContent = r?.result ? 'Filled ✓' : 'No login form found';
+            // the host the user approved (the saved site, or the page shown in the confirm) is checked again inside the
+            // page at fill time, so a tab that navigated elsewhere in the meantime gets nothing
+            const expect = (ok ? parseUrl(urlsOf(d).find((u) => urlMatches(tab.url, u)))?.hostname : host) || '';
+            const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: fillForm, args: [d.username || '', d.password || '', expect.toLowerCase().replace(/^www\./, '')] });
+            e.target.textContent = r?.result === -1 ? 'Page changed, not filled' : r?.result ? 'Filled ✓' : 'No login form found';
           } catch { e.target.textContent = 'Cannot fill this page'; }
         } }, ok ? 'Fill' : 'Fill…'),
         d.username && h('button', { onclick: (e) => copyFor(d.username, e.target, 'Copied', false) }, 'User'),
