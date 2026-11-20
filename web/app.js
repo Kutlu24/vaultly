@@ -6,7 +6,24 @@ const S = {
   vaults: [], items: new Map(), view: { k: 'all' }, sel: null, q: '', edit: null,
   pwned: new Map(), tick: null, idle: null, pending: [],
 };
-const TYPES = { login: 'Login', note: 'Note', card: 'Card' };
+const TYPES = { login: 'Login', note: 'Note', card: 'Card', identity: 'Identity', wifi: 'Wi-Fi', bank: 'Bank account', license: 'Software license', apikey: 'API key', ssh: 'SSH key', server: 'Server / database' };
+// field definitions of the structured types; values live in item.data.x
+const XFIELDS = {
+  identity: [['fullname', 'Full name'], ['email', 'Email'], ['phone', 'Phone'], ['address', 'Address', { area: 1 }], ['birth', 'Date of birth'], ['idnum', 'ID / passport number', { secret: 1 }], ['org', 'Organisation']],
+  wifi: [['ssid', 'Network name (SSID)'], ['password', 'Password', { secret: 1, mono: 1 }], ['security', 'Security (WPA2, WPA3…)']],
+  bank: [['bank', 'Bank'], ['holder', 'Account holder'], ['iban', 'IBAN', { mono: 1 }], ['bic', 'BIC / SWIFT', { mono: 1 }], ['account', 'Account number', { mono: 1 }], ['ebanking', 'E-banking login'], ['pin', 'PIN / password', { secret: 1, mono: 1 }]],
+  license: [['product', 'Product'], ['key', 'License key', { secret: 1, mono: 1 }], ['email', 'Registered to'], ['version', 'Version'], ['expires', 'Valid until'], ['seats', 'Seats']],
+  apikey: [['service', 'Service'], ['key', 'Key / token', { secret: 1, mono: 1 }], ['secret', 'Secret', { secret: 1, mono: 1 }], ['url', 'Endpoint / console', { link: 1 }], ['expires', 'Expires']],
+  ssh: [['host', 'Host'], ['user', 'User'], ['private', 'Private key', { secret: 1, mono: 1, area: 1 }], ['public', 'Public key', { mono: 1, area: 1 }], ['passphrase', 'Key passphrase', { secret: 1, mono: 1 }]],
+  server: [['host', 'Host'], ['port', 'Port'], ['user', 'User'], ['password', 'Password', { secret: 1, mono: 1 }], ['database', 'Database'], ['url', 'Admin URL', { link: 1 }]],
+};
+const tagsOf = (d) => (Array.isArray(d.tags) ? d.tags.filter((t) => typeof t === 'string' && t) : []);
+function subtitle(d) {
+  if (d.type === 'login') return d.username || '';
+  if (d.type === 'card') return '•••• ' + (d.card?.number || '').slice(-4);
+  if (XFIELDS[d.type]) { const f = XFIELDS[d.type].find(([k, , o]) => d.x?.[k] && !o?.secret); return (TYPES[d.type] || '') + (f ? ' · ' + d.x[f[0]] : ''); }
+  return 'Note';
+}
 const ROLES = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
 
 // ------------------------------------------------------------------ helpers
@@ -81,6 +98,9 @@ async function renderAuth(mode, msg) {
   const meterT = h('div', { class: 'muted' });
   const out = h('div', { class: 'err' }, msg || '');
   const btn = h('button', { class: 'primary', type: 'submit' }, mode === 'setup' ? 'Create administrator account' : reg ? 'Create account' : 'Sign in');
+  let pending2fa = null;
+  const code = h('input', { inputmode: 'text', autocomplete: 'one-time-code', placeholder: '6-digit code or a recovery code' });
+  const codeBox = h('div', { hidden: true }, h('label', {}, 'Two-factor code'), code, h('p', { class: 'muted' }, 'Open your authenticator app. Lost your phone? Enter one of your recovery codes.'));
   pw.addEventListener('input', () => {
     if (!reg) return; const s = C.strength(pw.value);
     meter.firstChild.className = 's' + s.level; meter.firstChild.style.width = Math.min(100, s.bits) + '%'; meterT.textContent = s.label ? `${s.label} · ~${s.bits} bit` : '';
@@ -97,10 +117,17 @@ async function renderAuth(mode, msg) {
         const r = await api('POST', '/register', { email: email.value, name: name.value || email.value, salt, iters: C.ITERS, auth, ...ident, invite: mode === 'setup' ? null : inv.value.trim() });
         history.replaceState(null, '', location.pathname);
         await startSession(r, masterKey);
+      } else if (pending2fa) {
+        await startSession(await api('POST', '/login', { email: pending2fa.email, auth: pending2fa.auth, code: code.value.trim() }), pending2fa.masterKey);
       } else {
         const pre = await api('GET', '/prelogin?email=' + encodeURIComponent(email.value));
         const { masterKey, auth } = await C.deriveKeys(pw.value, pre.salt, pre.iters);
-        await startSession(await api('POST', '/login', { email: email.value, auth }), masterKey);
+        try { await startSession(await api('POST', '/login', { email: email.value, auth }), masterKey); }
+        catch (ex) {
+          if (errMsg(ex) !== '2FA_REQUIRED') throw ex;
+          pending2fa = { email: email.value, auth, masterKey };   // keep the derived keys: no second 600k-round derivation
+          codeBox.hidden = false; email.disabled = pw.disabled = true; code.focus(); btn.disabled = false; btn.textContent = 'Verify'; return;
+        }
       }
     } catch (ex) { out.textContent = errMsg(ex); btn.disabled = false; btn.textContent = 'Try again'; }
   } },
@@ -109,7 +136,7 @@ async function renderAuth(mode, msg) {
     h('label', {}, 'Email'), email,
     reg && [h('label', {}, 'Full name'), name],
     reg && mode !== 'setup' && [h('label', {}, 'Invite code'), inv],
-    h('label', {}, 'Master password'), pw,
+    h('label', {}, 'Master password'), pw, !reg && codeBox,
     reg && [meter, meterT, h('label', {}, 'Master password (repeat)'), pw2,
       h('p', { class: 'muted' }, 'Nobody can reset your master password — not even the server. If you forget it your data cannot be recovered; write it down somewhere safe.')],
     out, btn,
@@ -182,7 +209,8 @@ function renderSide() {
     nav('All items', { k: 'all' }, live.length),
     nav('★ Favorites', { k: 'fav' }, live.filter((i) => i.data.fav).length),
     h('h4', {}, 'Types'),
-    ...Object.entries(TYPES).map(([t, l]) => nav(l, { k: 'type', t }, live.filter((i) => i.data.type === t).length)),
+    ...Object.entries(TYPES).filter(([t]) => t === 'login' || live.some((i) => i.data.type === t)).map(([t, l]) => nav(l, { k: 'type', t }, live.filter((i) => i.data.type === t).length)),
+    ...(() => { const tags = new Map(); live.forEach((i) => tagsOf(i.data).forEach((t) => tags.set(t, (tags.get(t) || 0) + 1))); return tags.size ? [h('h4', {}, 'Tags'), ...[...tags].sort((a, b) => a[0].localeCompare(b[0])).map(([t, n]) => nav('#' + t, { k: 'tag', t }, n))] : []; })(),
     h('h4', {}, 'Vaults'),
     ...S.vaults.map((x) => nav(x.name, { k: 'vault', id: x.id }, live.filter((i) => i.vid === x.id).length, x.member_count > 1 || !x.mine ? h('span', { class: 'count', title: (x.mine ? '' : 'Owners: ' + x.owners + ' · ') + x.member_count + ' members' }, '👥') : null)),
     ...S.pending.map((p) => h('div', { class: 'card' }, h('div', {}, '📨 Vault invitation'), h('div', { class: 'muted' }, `Invited by: ${p.creator || '?'} · Role: ${ROLES[p.role]} · Vault owners: ${p.owners || '?'}. Decline invitations from people you don\'t know. The contents stay inaccessible until you accept.`),
@@ -193,12 +221,14 @@ function renderSide() {
     nav('Security Scan', { k: 'monitor' }),
     nav('Trash', { k: 'trash' }, [...S.items.values()].filter((i) => i.trashed).length),
     h('button', { class: 'nav', onclick: () => openGenerator() }, 'Password generator'),
+    nav('Send (share a secret)', { k: 'send' }),
     S.user.is_admin && nav('Admin', { k: 'admin' }),
     nav('Settings', { k: 'settings' }),
+    h('a', { class: 'nav', href: 'help.html', target: '_blank', rel: 'noopener' }, 'Help'),
     h('div', { class: 'spacer' }),
     h('div', { class: 'muted', style: null }, S.user.email),
     h('button', { onclick: async () => { try { await api('POST', '/logout'); } catch { /* ignore */ } lock('Signed out.'); } }, '🔒 Lock'));
-  el.shell.classList.toggle('wide', ['monitor', 'admin', 'settings'].includes(v.k));
+  el.shell.classList.toggle('wide', ['monitor', 'admin', 'settings', 'send'].includes(v.k));
 }
 
 function visible() {
@@ -207,14 +237,16 @@ function visible() {
   if (v.k === 'fav') l = l.filter((i) => i.data.fav);
   if (v.k === 'type') l = l.filter((i) => i.data.type === v.t);
   if (v.k === 'vault') l = l.filter((i) => i.vid === v.id);
-  if (q) l = l.filter((i) => [i.data.title, i.data.username, i.data.urls, i.data.notes].join(' ').toLowerCase().includes(q));
+  if (v.k === 'tag') l = l.filter((i) => tagsOf(i.data).includes(v.t));
+  if (q) l = l.filter((i) => [i.data.title, i.data.username, i.data.urls, i.data.notes, ...tagsOf(i.data).map((t) => '#' + t),
+    ...Object.entries(i.data.x || {}).filter(([k]) => !(XFIELDS[i.data.type] || []).find(([f, , o]) => f === k && o?.secret)).map(([, x]) => x)].join(' ').toLowerCase().includes(q));
   return l.sort((a, b) => (a.data.title || '').localeCompare(b.data.title || ''));
 }
 function renderList() {
   const l = visible();
   el.items.replaceChildren(...(l.length ? l.map((i) => h('div', { class: 'item' + (S.sel === i.id ? ' sel' : ''), tabindex: 0, onclick: () => { S.sel = i.id; S.edit = null; renderList(); renderDetail(); }, onkeydown: (e) => e.key === 'Enter' && e.target.click() },
     h('div', { class: 'ico', style: null, ...{} }, (i.data.title || '?')[0].toUpperCase()),
-    h('div', { class: 'grow' }, h('div', { class: 't' }, (i.data.fav ? '★ ' : '') + (i.data.title || '(untitled)')), h('div', { class: 's' }, i.data.type === 'login' ? i.data.username || '' : i.data.type === 'card' ? '•••• ' + (i.data.card?.number || '').slice(-4) : 'Note'))))
+    h('div', { class: 'grow' }, h('div', { class: 't' }, (i.data.fav ? '★ ' : '') + (i.data.title || '(untitled)')), h('div', { class: 's' }, subtitle(i.data)))))
     : [h('div', { class: 'empty' }, S.q ? 'No results.' : S.view.k === 'trash' ? 'Trash is empty.' : 'No items yet. Add one with +.')]));
   // colour the avatar via CSSOM (CSP forbids inline style attributes)
   [...el.items.querySelectorAll('.ico')].forEach((n, idx) => { n.style.background = `hsl(${hue(l[idx].data.title)} 55% 45%)`; });
@@ -226,6 +258,7 @@ function renderDetail() {
   if (k === 'monitor') return d.replaceChildren(monitorView());
   if (k === 'admin') return d.replaceChildren(adminView());
   if (k === 'settings') return d.replaceChildren(settingsView());
+  if (k === 'send') return d.replaceChildren(sendView());
   if (S.edit) return d.replaceChildren(editForm(S.edit));
   const it = S.sel && S.items.get(S.sel);
   if (!it) return d.replaceChildren(h('div', { class: 'empty' }, 'Select an item or create a new one.'));
@@ -233,10 +266,10 @@ function renderDetail() {
 }
 
 // ------------------------------------------------------------------ item view
-function fieldRow(label, value, { secret = false, link = false, mono = false } = {}) {
-  if (!value) return null;
-  let shown = secret; const v = h('div', { class: 'v' + (mono ? ' mono' : '') });
-  const paint = () => { v.replaceChildren(secret && !shown ? '••••••••••' : (link && safeUrl(value) ? h('a', { href: safeUrl(value), target: '_blank', rel: 'noopener noreferrer' }, value) : value)); };
+function fieldRow(label, value, { secret = false, link = false, mono = false, area = false } = {}) {
+  if (!value) return document.createDocumentFragment();   // empty: appends nothing (append(null) would print "null")
+  let shown = !secret; const v = h('div', { class: 'v' + (mono ? ' mono' : '') + (area ? ' pre' : '') });
+  const paint = () => { v.replaceChildren(!shown ? '••••••••••' : (link && safeUrl(value) ? h('a', { href: safeUrl(value), target: '_blank', rel: 'noopener noreferrer' }, value) : value)); };
   paint();
   return h('div', { class: 'field' }, h('div', { class: 'grow' }, h('div', { class: 'l' }, label), v),
     secret && h('button', { class: 'small', onclick: () => { shown = !shown; paint(); } }, '👁'),
@@ -249,10 +282,13 @@ function itemView(it) {
     h('div', { class: 'row wrap' }, h('h2', { class: 'grow' }, (d.fav ? '★ ' : '') + (d.title || '(untitled)')),
       !it.trashed && w && h('button', { onclick: async () => { d.fav = !d.fav; await persist(it.vid, it, d); renderAll(); } }, d.fav ? '★' : '☆'),
       !it.trashed && w && h('button', { onclick: () => { S.edit = { item: it }; renderDetail(); } }, 'Edit'),
+      !it.trashed && h('button', { title: 'Share this item with someone outside the team through an expiring link', onclick: () => { S.sendDraft = itemAsText(d); go({ k: 'send' }); } }, 'Send…'),
       !it.trashed && w && h('button', { class: 'danger', onclick: () => trash(it, true) }, 'Move to trash'),
       it.trashed && w && h('button', { onclick: () => trash(it, false) }, 'Restore'),
       it.trashed && w && h('button', { class: 'danger', onclick: () => hardDelete(it) }, 'Delete forever')),
-    h('div', { class: 'muted' }, h('span', { class: 'chip tag' }, TYPES[d.type]), h('span', { class: 'chip tag' }, vault ? vault.name : '?'), !w && h('span', { class: 'chip' }, 'read-only')));
+    h('div', { class: 'muted' }, h('span', { class: 'chip tag' }, TYPES[d.type]), h('span', { class: 'chip tag' }, vault ? vault.name : '?'), !w && h('span', { class: 'chip' }, 'read-only'),
+      ...tagsOf(d).map((t) => h('a', { href: '#', class: 'chip', onclick: (e) => { e.preventDefault(); go({ k: 'tag', t }); } }, '#' + t))));
+  if (XFIELDS[d.type]) for (const [k, label, o = {}] of XFIELDS[d.type]) box.append(fieldRow(label, d.x?.[k], { secret: !!o.secret, mono: !!o.mono, area: !!o.area, link: !!o.link }));
   if (d.type === 'login') {
     box.append(fieldRow('Username', d.username), fieldRow('Password', d.password, { secret: true, mono: true }));
     if (d.password) { const s = C.strength(d.password); box.append(h('div', { class: 'muted' }, `Strength: ${s.label} (~${s.bits} bit)`, h('button', { class: 'small ghost', onclick: (e) => checkPwned(d.password, e.target) }, 'Breach check'))); }
@@ -351,6 +387,12 @@ function editForm(ed) {
       const c = d.card || {};
       parts.push(input('holder', 'Cardholder', { v: c.holder }), input('number', 'Card number', { v: c.number }), input('exp', 'Expiry (MM/YY)', { v: c.exp }), input('cvv', 'CVV', { v: c.cvv }), input('pin', 'PIN', { v: c.pin }));
     }
+    if (XFIELDS[type]) for (const [k, label, o = {}] of XFIELDS[type]) {
+      parts.push(input('x_' + k, label, { v: d.x?.[k], area: !!o.area }));
+      if (o.mono) refs['x_' + k].classList.add('mono');
+      if (o.secret && !o.area && (k === 'password' || k === 'pin' || k === 'passphrase')) parts.push(h('button', { type: 'button', class: 'small', onclick: () => openGenerator((p) => { refs['x_' + k].value = p; }) }, '🎲 Generate'));
+    }
+    parts.push(input('tags', 'Tags (comma separated, e.g. finance, website)', { v: tagsOf(d).join(', ') }));
     parts.push(input('notes', 'Notes', { v: d.notes, area: true }), h('label', {}, 'Custom fields'), fieldsBox,
       h('button', { type: 'button', class: 'small', onclick: () => addRow() }, '+ Add field'),
       h('div', { class: 'row', class2: null }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => { S.edit = null; renderDetail(); } }, 'Cancel')));
@@ -374,6 +416,8 @@ function editForm(ed) {
     d.title = g('title') ?? d.title ?? '';
     if (type === 'login') { d.username = g('username'); d.password = g('password'); d.urls = g('urls'); d.totp = g('totp'); }
     if (type === 'card') d.card = { holder: g('holder'), number: g('number'), exp: g('exp'), cvv: g('cvv'), pin: g('pin') };
+    if (XFIELDS[type]) { d.x = {}; for (const [k] of XFIELDS[type]) { const val = g('x_' + k); if (val) d.x[k] = val; } }
+    if (refs.tags) d.tags = [...new Set(refs.tags.value.split(',').map((t) => t.trim().replace(/^#/, '').slice(0, 40)).filter(Boolean))].slice(0, 20);
     d.notes = g('notes'); d.fav = !!d.fav;
     d.fields = refs.rows.filter((r) => r.k.value.trim()).map((r) => ({ k: r.k.value.trim(), v: r.v.value, secret: r.s.checked }));
   };
@@ -381,18 +425,92 @@ function editForm(ed) {
 }
 
 // ------------------------------------------------------------------ generator
+let WORDS = null;
+async function words() { if (!WORDS) WORDS = C.parseWordlist(await (await fetch('vendor/eff_large_wordlist.txt')).text()); return WORDS; }
 function openGenerator(onUse) {
-  const o = { length: 20, lower: true, upper: true, digits: true, symbols: true, avoidAmbiguous: true };
-  const out = h('div', { class: 'genout mono' }), meta = h('div', { class: 'muted' });
-  const gen = () => { const p = C.generatePassword(o); out.textContent = p; const s = C.strength(p); meta.textContent = `${s.label} · ~${s.bits} bit`; };
-  const len = h('input', { type: 'range', min: 8, max: 64, value: 20, oninput: (e) => { o.length = +e.target.value; lenL.textContent = o.length; gen(); } });
-  const lenL = h('b', {}, '20');
+  const o = { mode: localStorage.getItem('vaultly.genmode') || 'chars', length: 20, lower: true, upper: true, digits: true, symbols: true, avoidAmbiguous: true, count: 5, sep: '-', capitalize: true, number: true };
+  const out = h('div', { class: 'genout mono' }), meta = h('div', { class: 'muted' }), opts = h('div');
+  const gen = async () => {
+    const p = o.mode === 'words' ? C.passphrase(await words(), o) : C.generatePassword(o); out.textContent = p;
+    const bits = o.mode === 'words' ? Math.round(o.count * Math.log2(7776) + (o.number ? Math.log2(10 * o.count) : 0)) : C.strength(p).bits;
+    meta.textContent = `~${bits} bit` + (o.mode === 'words' ? ' · easy to type and remember' : '');
+  };
   const cb = (k, l) => h('label', {}, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; gen(); } }), l);
-  const d = modal('Password generator', out, meta, h('label', {}, 'Length: ', lenL), len,
-    h('div', { class: 'opts' }, cb('lower', 'a-z'), cb('upper', 'A-Z'), cb('digits', '0-9'), cb('symbols', '!@#'), cb('avoidAmbiguous', 'Exclude look-alike characters')),
-    h('div', { class: 'row', style: null }, h('button', { onclick: gen }, '↻ Regenerate'), h('button', { onclick: () => copy(out.textContent) }, 'Copy'),
+  const drawOpts = () => {
+    if (o.mode === 'words') {
+      const cnt = h('b', {}, String(o.count));
+      opts.replaceChildren(h('label', {}, 'Words: ', cnt), h('input', { type: 'range', min: 3, max: 10, value: o.count, oninput: (e) => { o.count = +e.target.value; cnt.textContent = o.count; gen(); } }),
+        h('div', { class: 'opts' }, h('label', {}, 'Separator ', h('select', { onchange: (e) => { o.sep = e.target.value; gen(); } }, [['-', '-'], [' ', 'space'], ['.', '.'], ['_', '_'], ['', 'none']].map(([v, l]) => h('option', { value: v, selected: o.sep === v }, l)))),
+          cb('capitalize', 'Capitalise'), cb('number', 'Add a digit')));
+    } else {
+      const lenL = h('b', {}, String(o.length));
+      opts.replaceChildren(h('label', {}, 'Length: ', lenL), h('input', { type: 'range', min: 8, max: 64, value: o.length, oninput: (e) => { o.length = +e.target.value; lenL.textContent = o.length; gen(); } }),
+        h('div', { class: 'opts' }, cb('lower', 'a-z'), cb('upper', 'A-Z'), cb('digits', '0-9'), cb('symbols', '!@#'), cb('avoidAmbiguous', 'Exclude look-alike characters')));
+    }
+  };
+  const modeSel = h('div', { class: 'row' }, ...[['chars', 'Random characters'], ['words', 'Words (passphrase)']].map(([m, l]) => h('label', {}, h('input', { type: 'radio', name: 'genmode', checked: o.mode === m, onchange: () => { o.mode = m; localStorage.setItem('vaultly.genmode', m); drawOpts(); gen(); } }), l)));
+  const d = modal('Password generator', modeSel, out, meta, opts,
+    h('div', { class: 'row' }, h('button', { onclick: gen }, '↻ Regenerate'), h('button', { onclick: () => copy(out.textContent) }, 'Copy'),
       onUse && h('button', { class: 'primary', onclick: () => { onUse(out.textContent); d.close(); } }, 'Use'), h('button', { onclick: () => d.close() }, 'Close')));
-  gen();
+  drawOpts(); gen();
+}
+
+// ------------------------------------------------------------------ Send
+function itemAsText(d) {
+  const lines = [d.title || ''];
+  if (d.type === 'login') { if (d.urls) lines.push('Website: ' + d.urls); if (d.username) lines.push('Username: ' + d.username); if (d.password) lines.push('Password: ' + d.password); }
+  if (d.type === 'card') { const c = d.card || {}; lines.push(...[['Cardholder', c.holder], ['Number', c.number], ['Expiry', c.exp], ['CVV', c.cvv]].filter((x) => x[1]).map((x) => x.join(': '))); }
+  if (XFIELDS[d.type]) for (const [k, label] of XFIELDS[d.type]) if (d.x?.[k]) lines.push(`${label}: ${d.x[k]}`);
+  if (d.notes) lines.push('', d.notes);
+  return lines.join('\n');
+}
+
+function sendView() {
+  const text = h('textarea', { rows: 6, value: S.sendDraft || '', placeholder: 'The secret to share, e.g. a password and its username' }); S.sendDraft = '';
+  const file = h('input', { type: 'file' });
+  const exp = h('select', {}, [[1, '1 hour'], [24, '1 day'], [72, '3 days'], [168, '7 days'], [720, '30 days']].map(([v, l]) => h('option', { value: v, selected: v === 24 }, l)));
+  const views = h('select', {}, [[1, '1 view'], [2, '2 views'], [5, '5 views'], [10, '10 views'], [0, 'unlimited']].map(([v, l]) => h('option', { value: v }, l)));
+  const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Optional: tell the recipient separately (phone)' });
+  const note = h('input', { placeholder: 'Your own label, e.g. "WiFi for the accountant" (not shown to the recipient)', maxlength: 200 });
+  const out = h('div'), list = h('div');
+  const drawList = async () => {
+    try {
+      const rows = await api('GET', '/sends');
+      list.replaceChildren(rows.length ? h('table', {}, h('tr', {}, h('th', {}, 'Label'), h('th', {}, 'Created'), h('th', {}, 'Expires'), h('th', {}, 'Views'), h('th')),
+        ...rows.map((r) => h('tr', {}, h('td', {}, r.note || h('span', { class: 'muted' }, '(no label)'), r.has_password ? ' 🔑' : ''), h('td', {}, fmtDate(r.created)), h('td', {}, fmtDate(r.expires)),
+          h('td', {}, `${r.views}${r.max_views ? ' / ' + r.max_views : ''}`),
+          h('td', {}, h('button', { class: 'small danger', onclick: async () => { await api('DELETE', '/sends/' + r.id); drawList(); } }, 'Delete')))))
+        : h('p', { class: 'muted' }, 'No active links.'));
+    } catch (e) { list.replaceChildren(h('p', { class: 'err' }, errMsg(e))); }
+  };
+  const create = h('button', { class: 'primary', onclick: async () => {
+    out.replaceChildren(); create.disabled = true;
+    try {
+      let obj;
+      if (file.files[0]) {
+        const f = file.files[0]; if (f.size > 10 * 1024 * 1024) throw new Error('Files up to 10 MB.');
+        obj = { kind: 'file', name: f.name, type: f.type || 'application/octet-stream', data: C.b64big(await f.arrayBuffer()), text: text.value };
+      } else {
+        if (!text.value.trim()) throw new Error('Write the secret or choose a file.');
+        obj = { kind: 'text', text: text.value };
+      }
+      const { enc, key } = await C.sendEncrypt(obj);
+      const r = await api('POST', '/sends', { enc, expire_hours: +exp.value, max_views: +views.value || null, password: pw.value || null, note: note.value });
+      const link = `${location.origin}/send.html#${r.id}.${key}`;
+      text.value = ''; file.value = ''; pw.value = ''; note.value = '';
+      out.replaceChildren(h('div', { class: 'card' }, h('b', {}, 'Link created. Copy it now: it cannot be shown again (the key is not stored anywhere).'),
+        h('div', { class: 'row' }, h('input', { value: link, readonly: true, class: 'mono grow' }), h('button', { class: 'primary', onclick: () => copy(link, 'Link copied') }, 'Copy'))));
+      drawList();
+    } catch (e) { out.replaceChildren(h('p', { class: 'err' }, errMsg(e))); }
+    create.disabled = false;
+  } }, 'Create link');
+  drawList();
+  return h('div', {}, h('h2', {}, 'Send'),
+    h('p', { class: 'muted' }, 'Share a password, note or file with someone who has no Vaultly account. It is encrypted in your browser; the key is only inside the link, so the server cannot read it. The link stops working after the time or number of views you choose.'),
+    h('div', { class: 'card' }, h('label', {}, 'Text'), text, h('label', {}, 'or a file (up to 10 MB)'), file,
+      h('div', { class: 'kv' }, h('div', {}, h('label', {}, 'Expires after'), exp), h('div', {}, h('label', {}, 'Can be opened'), views)),
+      h('label', {}, 'Password (optional)'), pw, h('label', {}, 'Label'), note, create, out),
+    h('div', { class: 'card' }, h('h3', {}, 'Your active links'), list));
 }
 
 // ------------------------------------------------------------------ vaults / sharing
@@ -448,12 +566,27 @@ async function vaultDialog(v) {
       } }, 'Add'),
       h('h4', {}, 'Vault settings'),
       h('div', { class: 'row' }, h('button', { onclick: async () => { const n = prompt('New name', v.name); if (!n) return; await api('PUT', `/vaults/${v.id}`, { enc_name: await C.encJSON(v.key, { name: n }) }); await loadAll(); renderAll(); d.close(); } }, 'Rename'),
+        h('button', { onclick: () => snapshotsDialog(v) }, 'Snapshots'),
         h('button', { onclick: async () => { const rows = await api('GET', `/vaults/${v.id}/audit`); const dd = modal('Activity log', h('div', { class: 'items' }, h('table', {}, rows.map((r) => h('tr', {}, h('td', {}, fmtDate(r.ts)), h('td', {}, r.email || '-'), h('td', {}, r.action))))), h('button', { onclick: () => dd.close() }, 'Close')); } }, 'Activity log'),
         h('button', { class: 'danger', onclick: async () => { if (!confirm('The vault and ALL its items will be deleted for every member!')) return; await api('DELETE', `/vaults/${v.id}`); await loadAll(); d.close(); go({ k: 'all' }); } }, 'Delete vault')));
     parts.push(h('div', { class: 'row' }, h('button', { onclick: () => d.close() }, 'Close')));
     body.replaceChildren(...parts);
   };
   draw();
+}
+
+async function snapshotsDialog(v) {
+  const body = h('div');
+  const d = modal('Snapshots: ' + v.name, h('p', { class: 'muted' }, 'The server keeps an encrypted copy of this vault once a day (14 days) and before every restore. Restoring brings every item back to its state at that time, including deleted ones; items added later are kept. Rotating the key (after removing a member) clears older snapshots.'), body,
+    h('div', { class: 'row' }, h('button', { onclick: () => d.close() }, 'Close')));
+  try {
+    const rows = await api('GET', `/vaults/${v.id}/snapshots`);
+    body.replaceChildren(rows.length ? h('table', {}, rows.map((r) => h('tr', {}, h('td', {}, fmtDate(r.at)), h('td', { class: 'muted' }, r.reason), h('td', {}, `${r.count} items`),
+      h('td', {}, h('button', { class: 'small', onclick: async (e) => {
+        if (!confirm(`Restore "${v.name}" to ${fmtDate(r.at)}? Every member sees the change. The current state is saved as a snapshot first.`)) return;
+        try { const x = await api('POST', `/vaults/${v.id}/snapshots/${r.id}/restore`); await loadAll(); renderAll(); d.close(); toast(`${x.restored} item(s) restored`); } catch (er) { toast(errMsg(er)); }
+      } }, 'Restore'))))) : h('p', { class: 'muted' }, 'No snapshot yet: the first one is made before the first change of the day.'));
+  } catch (e) { body.replaceChildren(h('p', { class: 'err' }, errMsg(e))); }
 }
 
 // ------------------------------------------------------------------ monitor
@@ -499,9 +632,10 @@ function adminView() {
           ...invites.map((i) => h('div', { class: 'row' }, h('span', { class: 'mono grow' }, `${location.origin}/#invite=${i.code}`, i.email ? ` (${i.email})` : ''),
             h('button', { class: 'small', onclick: () => copy(`${location.origin}/#invite=${i.code}`) }, 'Copy'), h('button', { class: 'small danger', onclick: async () => { await api('DELETE', '/admin/invites/' + i.code); draw(); } }, 'Cancel')))),
         h('div', { class: 'card' }, h('h3', {}, 'Users'), h('table', {}, users.map((u) => h('tr', {},
-          h('td', {}, u.name, h('div', { class: 'muted' }, u.email)), h('td', {}, u.is_admin ? 'Admin' : 'Member', u.disabled ? ' · disabled' : ''),
+          h('td', {}, u.name, h('div', { class: 'muted' }, u.email)), h('td', {}, u.is_admin ? 'Admin' : 'Member', u.disabled ? ' · disabled' : '', u.totp ? ' · 2FA' : ''),
           h('td', {}, u.id !== S.user.id && h('button', { class: 'small', onclick: async () => { await api('POST', `/admin/users/${u.id}/disable?disable=${!u.disabled}`); draw(); } }, u.disabled ? 'Enable' : 'Disable'),
-            u.id !== S.user.id && h('button', { class: 'small', onclick: async () => { try { await api('POST', `/admin/users/${u.id}/admin?admin=${!u.is_admin}`); draw(); } catch (e) { toast(errMsg(e)); } } }, u.is_admin ? 'Remove admin' : 'Make admin'))))),
+            u.id !== S.user.id && h('button', { class: 'small', onclick: async () => { try { await api('POST', `/admin/users/${u.id}/admin?admin=${!u.is_admin}`); draw(); } catch (e) { toast(errMsg(e)); } } }, u.is_admin ? 'Remove admin' : 'Make admin'),
+            u.totp && u.id !== S.user.id && h('button', { class: 'small', title: 'For someone who lost both phone and recovery codes', onclick: async () => { if (!confirm(`Turn off two-factor sign-in for ${u.email}? Do this only after confirming their identity (e.g. in person). Their passwords stay protected by their master password.`)) return; try { await api('POST', `/admin/users/${u.id}/reset-2fa`); toast('2FA reset'); draw(); } catch (e) { toast(errMsg(e)); } } }, 'Reset 2FA'))))),
           h('p', { class: 'muted' }, 'After disabling a user, vault owners should also remove them from shared vaults (this rotates the vault key).')),
         h('div', { class: 'card' }, h('h3', {}, 'Recent activity'), h('table', {}, audit.slice(0, 100).map((r) => h('tr', {}, h('td', {}, fmtDate(r.ts)), h('td', {}, r.email || '-'), h('td', {}, r.action, r.detail && r.action.startsWith('user.') ? ' ' + r.detail : ''))))));
     } catch (e) { body.replaceChildren(h('p', { class: 'err' }, errMsg(e))); }
@@ -539,6 +673,96 @@ async function importCSV(file, vid, status) {
   return n;
 }
 
+async function masterAuth(password) {   // re-derive the server "auth" value to confirm a sensitive change
+  const pre = await api('GET', '/prelogin?email=' + encodeURIComponent(S.user.email));
+  return (await C.deriveKeys(password, pre.salt, pre.iters)).auth;
+}
+let qrLoaded = null;
+const loadQr = () => (qrLoaded ||= new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'vendor/qrcode.min.js'; sc.onload = ok; sc.onerror = no; document.head.append(sc); }));
+function codesBox(codes) {
+  const txt = 'Vaultly recovery codes for ' + S.user.email + '\nEach code works once, instead of the 6-digit code.\n\n' + codes.join('\n') + '\n';
+  return h('div', { class: 'card' }, h('b', {}, 'Recovery codes: save them now, they are shown only once.'), h('div', { class: 'mono pre' }, codes.join('\n')),
+    h('div', { class: 'row' }, h('button', { onclick: () => copy(txt, 'Codes copied') }, 'Copy'),
+      h('button', { onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([txt], { type: 'text/plain' })), download: 'vaultly-recovery-codes.txt' }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); } }, 'Download .txt')));
+}
+function twofaCard() {
+  const box = h('div', { class: 'card' }, h('h3', {}, 'Two-factor sign-in'));
+  const body = h('div'); box.append(body);
+  const pwIn = () => h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Master password' });
+  const draw = async () => {
+    const st = await api('GET', '/2fa/status'); const out = h('div', { class: 'err' });
+    if (!st.on) {
+      const p = pwIn();
+      body.replaceChildren(h('p', { class: 'muted' }, 'Off. With it on, signing in also needs a code from an authenticator app (Google Authenticator, Aegis, 2FAS, Microsoft Authenticator…). Recommended: this server is reachable from the internet.'),
+        p, out, h('button', { class: 'primary', onclick: async () => {
+          try {
+            const r = await api('POST', '/2fa/setup', { auth: await masterAuth(p.value) });
+            const img = h('img', { alt: 'QR code', class: 'qr' }); loadQr().then(() => { const q = window.qrcode(0, 'M'); q.addData(r.uri); q.make(); img.src = q.createDataURL(5, 8); }).catch(() => img.remove());
+            const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '6-digit code from the app' }); const o2 = h('div', { class: 'err' });
+            body.replaceChildren(h('p', {}, '1. Scan this with your authenticator app (or type the key).'), img, h('div', { class: 'mono' }, r.secret.match(/.{1,4}/g).join(' ')),
+              h('p', {}, '2. Enter the code the app shows:'), code, o2,
+              h('div', { class: 'row' }, h('button', { class: 'primary', onclick: async () => {
+                try { const x = await api('POST', '/2fa/enable', { code: code.value }); S.user.totp = true; body.replaceChildren(h('p', { class: 'ok' }, 'Two-factor sign-in is on.'), codesBox(x.recovery_codes), h('button', { onclick: draw }, 'Done')); }
+                catch (e) { o2.textContent = errMsg(e); }
+              } }, 'Turn on'), h('button', { onclick: draw }, 'Cancel')));
+          } catch (e) { out.textContent = errMsg(e); }
+        } }, 'Set up'));
+    } else {
+      const p = pwIn();
+      body.replaceChildren(h('p', { class: 'ok' }, `On. ${st.recovery_left} unused recovery code(s) left.`), p, out,
+        h('div', { class: 'row' }, h('button', { onclick: async () => { try { const x = await api('POST', '/2fa/recovery', { auth: await masterAuth(p.value) }); body.replaceChildren(codesBox(x.recovery_codes), h('button', { onclick: draw }, 'Done')); } catch (e) { out.textContent = errMsg(e); } } }, 'New recovery codes'),
+          h('button', { class: 'danger', onclick: async () => { if (!confirm('Turn off two-factor sign-in?')) return; try { await api('POST', '/2fa/disable', { auth: await masterAuth(p.value) }); S.user.totp = false; draw(); } catch (e) { out.textContent = errMsg(e); } } }, 'Turn off')),
+        h('p', { class: 'muted' }, 'Both actions ask for your master password.'));
+    }
+  };
+  draw().catch((e) => body.replaceChildren(h('p', { class: 'err' }, errMsg(e))));
+  return box;
+}
+function sessionsCard() {
+  const box = h('div', { class: 'card' }, h('h3', {}, 'Signed-in devices')), body = h('div'), act = h('div');
+  const draw = async () => {
+    const rows = await api('GET', '/account/sessions');
+    body.replaceChildren(h('table', {}, rows.map((r) => h('tr', {}, h('td', {}, r.agent || 'unknown', r.current ? h('span', { class: 'chip ok' }, 'this device') : null),
+      h('td', { class: 'muted' }, r.ip || ''), h('td', { class: 'muted' }, 'active ' + (r.last_seen ? fmtDate(r.last_seen) : '?')),
+      h('td', {}, !r.current && h('button', { class: 'small danger', onclick: async () => { await api('DELETE', '/account/sessions/' + r.id); draw(); } }, 'Sign out'))))),
+      rows.length > 1 ? h('button', { onclick: async () => { const x = await api('DELETE', '/account/sessions'); toast(`${x.ended} other device(s) signed out`); draw(); } }, 'Sign out all other devices') : null);
+    const a = await api('GET', '/account/activity');
+    const label = { 'user.login': 'Signed in', 'user.login_failed': '⚠ Failed sign-in', 'user.register': 'Account created', 'user.password_change': 'Master password changed', 'user.2fa_on': '2FA turned on', 'user.2fa_off': '2FA turned off', 'user.2fa_new_codes': 'New recovery codes', 'user.2fa_recovery_used': 'Recovery code used', 'user.2fa_reset_by_admin': '2FA reset by an administrator', 'user.sessions_end_all': 'Other devices signed out', 'user.session_end': 'A device was signed out', 'user.send_create': 'Send link created', 'user.send_opened': 'Send link opened' };
+    act.replaceChildren(h('details', {}, h('summary', {}, `Account activity (${a.filter((x) => x.action === 'user.login_failed').length} failed sign-ins)`),
+      h('table', {}, a.map((x) => h('tr', {}, h('td', {}, fmtDate(x.ts)), h('td', { class: x.action === 'user.login_failed' ? 'err' : '' }, label[x.action] || x.action), h('td', { class: 'muted' }, x.action.startsWith('user.send') ? '' : x.detail || ''))))));
+  };
+  draw().catch((e) => body.replaceChildren(h('p', { class: 'err' }, errMsg(e))));
+  box.append(body, act); return box;
+}
+function backupCard() {
+  const p1 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Backup password (12+ characters)' }), p2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat' });
+  const file = h('input', { type: 'file', accept: '.json' }), rpw = h('input', { type: 'password', placeholder: 'Backup password' }), out = h('div');
+  const writable = S.vaults.filter((v) => v.key && ['owner', 'editor'].includes(v.role));
+  const target = h('select', {}, writable.map((v) => h('option', { value: v.id }, v.name)));
+  return h('div', { class: 'card' }, h('h3', {}, 'Encrypted backup'),
+    h('p', { class: 'muted' }, 'A file with every item you can see (all vaults), encrypted with a password you choose. Keep it somewhere safe, e.g. a USB stick. It does not depend on this server or your account.'),
+    p1, p2, h('button', { class: 'primary', onclick: async () => {
+      out.className = 'err'; out.textContent = '';
+      try {
+        if (p1.value.length < 12) throw new Error('Backup password: at least 12 characters.'); if (p1.value !== p2.value) throw new Error('Passwords do not match.');
+        const items = liveItems().map((i) => ({ vault: vaultById(i.vid)?.name || '', data: i.data }));
+        const blob = await C.backupEncrypt(p1.value, { app: 'vaultly', at: Date.now(), by: S.user.email, items });
+        const a = h('a', { href: URL.createObjectURL(new Blob([blob], { type: 'application/json' })), download: `vaultly-backup-${new Date().toISOString().slice(0, 10)}.json` }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        p1.value = p2.value = ''; out.className = 'ok'; out.textContent = `Backup of ${items.length} items downloaded.`;
+      } catch (e) { out.textContent = errMsg(e); }
+    } }, 'Download encrypted backup'),
+    h('h4', {}, 'Restore from a backup'), h('p', { class: 'muted' }, 'Adds the items of a backup file to one vault (nothing is overwritten).'),
+    file, rpw, h('label', {}, 'Into vault'), target, h('button', { onclick: async () => {
+      out.className = 'err'; out.textContent = '';
+      try {
+        if (!file.files[0]) throw new Error('Choose the backup file.');
+        const b = await C.backupDecrypt(rpw.value, await file.files[0].text());
+        let n = 0; for (const it of b.items || []) { if (it?.data && typeof it.data === 'object') { const d = { ...it.data }; delete d.history; await persist(target.value, null, d); n++; out.className = 'muted'; out.textContent = `${n}/${b.items.length}…`; } }
+        out.className = 'ok'; out.textContent = `${n} items restored.`; renderSide();
+      } catch (e) { out.className = 'err'; out.textContent = errMsg(e); }
+    } }, 'Restore'), out);
+}
+
 function settingsView() {
   const minutes = h('select', { onchange: (e) => { localStorage.setItem('vaultly.autolock', e.target.value); armIdle(); toast('Saved'); } },
     [[1, '1 minute'], [5, '5 minutes'], [10, '10 minutes'], [30, '30 minutes'], [60, '1 hour'], [0, 'Never']].map(([v, l]) => h('option', { value: v, selected: +(localStorage.getItem('vaultly.autolock') || 10) === v }, l)));
@@ -549,6 +773,7 @@ function settingsView() {
   return h('div', {}, h('h2', {}, 'Settings'),
     h('div', { class: 'card' }, h('h3', {}, 'Account'), h('div', {}, `${S.user.name} · ${S.user.email}`), h('div', { class: 'muted' }, 'Public-key fingerprint (verify it with the other person when sharing): ', fp)),
     h('div', { class: 'card' }, h('h3', {}, 'Auto-lock'), minutes),
+    twofaCard(), sessionsCard(),
     h('div', { class: 'card' }, h('h3', {}, 'Vault management'), h('div', { class: 'row wrap' }, S.vaults.filter((v) => !v.broken).map((v) => h('button', { onclick: () => vaultDialog(v) }, `${v.name} (${ROLES[v.role]})`)))),
     h('div', { class: 'card' }, h('h3', {}, 'Change master password'), h('label', {}, 'Current'), cur, h('label', {}, 'New (at least 12 characters)'), n1, h('label', {}, 'New (repeat)'), n2, pwOut,
       h('button', { class: 'primary', onclick: async () => {
@@ -567,6 +792,7 @@ function settingsView() {
       } }, 'Change')),
     h('div', { class: 'card' }, h('h3', {}, 'Import'), h('div', { class: 'muted' }, 'CSV exports from Chrome, Bitwarden, Proton Pass, 1Password and similar.'), h('label', {}, 'Target vault'), target, h('label', {}, 'CSV file'), file, impOut,
       h('button', { onclick: async () => { if (!file.files[0]) return; try { const n = await importCSV(file.files[0], target.value, impOut); impOut.textContent = `${n} items imported.`; renderSide(); } catch (e) { impOut.className = 'err'; impOut.textContent = errMsg(e); } } }, 'Import')),
+    backupCard(),
     h('div', { class: 'card' }, h('h3', {}, 'Export'), h('div', { class: 'muted' }, 'The file is UNENCRYPTED plain text. Delete it securely when you are done.'),
       h('button', { onclick: () => {
         if (!confirm('All your passwords will be written to an unencrypted CSV file. Continue?')) return;

@@ -7,7 +7,11 @@ A self-hosted, end-to-end encrypted (zero-knowledge) password vault for small te
 - **Shared vaults** with roles (Owner / Editor / Viewer). Every vault has its own AES-256-GCM key, wrapped per member with RSA-OAEP.
 - **Key rotation on removal**: when a member is removed, the vault key is replaced and every item is re-encrypted, so the removed person cannot read future data with their old key.
 - **Invitations need consent**: a share stays pending until the invitee accepts; the invite card shows who invited them and who owns the vault.
-- Login / Note / Card items, custom fields, favorites, trash, password history
+- Item types: Login, Note, Card, Identity, Wi-Fi, Bank account, Software license, API key, SSH key, Server / database; tags, custom fields, favorites, trash, password history
+- **Send**: expiring, end-to-end encrypted links (text or files up to 10 MB) for people without an account; the key lives only in the link's `#fragment`; expiry, view limit, optional password, lock after 5 wrong passwords
+- **Two-factor sign-in** (TOTP, QR setup, 8 single-use recovery codes, replay protection; admins can reset it), **signed-in devices** list with "sign out all other devices", account activity incl. failed sign-ins
+- **Vault snapshots**: daily server-side ciphertext copies (14 days) + one before every restore; owners can undo mass deletion. Cleared on key rotation (old key)
+- **Encrypted backup** file (PBKDF2 + AES-256-GCM, own password) and restore; **passphrase generator** (EFF wordlist); in-app help (`/help.html`)
 - **TOTP (2FA) codes** (supports `otpauth://`), password generator, strength meter
 - **Security Scan**: weak, reused and old passwords, accounts without 2FA, Have I Been Pwned breach check (k-anonymity: only a 5-character hash prefix leaves the browser)
 - Invite-only sign-up, admin panel, activity logs, protection against concurrent edits
@@ -23,11 +27,11 @@ KASA_DATA=./data uvicorn server.main:app --port 8000     # or: docker compose up
 The first person to register becomes the administrator; everyone else joins through Admin → Create invite.
 
 ## Tests
-`node tests/e2e.mjs` (API + real encryption code) and `node tests/ui.mjs` (headless Chrome). Both need a running server (`KASA_URL`, default `http://localhost:8099`).
+`node tests/e2e.mjs` (API + real encryption code), `node tests/features.mjs` (2FA, sessions, Send, snapshots, backup) and `node tests/ui.mjs` (headless Chrome). Each needs a running server with an EMPTY data dir (`KASA_URL`, default `http://localhost:8099`).
 
 ## Limitations
 - No master-password recovery, by design. Not even the administrator can reset it.
-- No browser extension, mobile app or autofill yet.
+- No browser extension, mobile app, autofill or file attachments on items yet (Send handles one-off files).
 - If a member already opened or copied passwords before being removed, those passwords should be changed.
 - Back up `data/secret.key` and `data/kasa.db`.
 
@@ -57,3 +61,6 @@ These control the login rate limits, which key on the client IP:
 | `KASA_TRUSTED_PROXIES` | Comma-separated CIDRs allowed to supply those headers (default: loopback + private ranges). Narrow it to your proxy's exact address when you can, e.g. `172.17.0.1/32`. |
 
 Login throttling: 8 failures per IP+account per 5 minutes, and 30 failures per account per 15 minutes (IPs that previously logged in successfully are exempt from the account-wide cap). Blocked requests get `429` with `Retry-After`.
+
+## Third-party files
+`web/vendor/eff_large_wordlist.txt`: EFF large wordlist, CC BY 3.0 US (Electronic Frontier Foundation). `web/vendor/qrcode.min.js`: qrcode-generator by Kazuhiko Arase, MIT licence.

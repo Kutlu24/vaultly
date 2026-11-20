@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultly Help</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="help">
+<h1><img class="logo" src="icon.svg" alt="" width="28" height="28"> Vaultly help</h1>
+<p>Vaultly is the team's password manager. Everything is encrypted in your browser with keys derived from your master password: the server only stores ciphertext and cannot read your passwords.</p>
+<p><a href="/">← Back to Vaultly</a></p>
+
+<h2 id="start">Getting started</h2>
+<ul>
+<li>An administrator sends you an <b>invite link</b>. Open it, enter your name, email and a <b>master password</b> (at least 12 characters; a long sentence works well).</li>
+<li><b>Nobody can reset your master password</b>, not even the administrator. If you forget it, your data is gone. Write it down and keep it somewhere safe.</li>
+<li>You get a private vault called <i>Personal</i>. Shared vaults appear after you accept an invitation in the sidebar.</li>
+</ul>
+
+<h2 id="items">Items and types</h2>
+<p>Press <b>+</b> to add an item and pick its type: Login, Note, Card, Identity, Wi-Fi, Bank account, Software license, API key, SSH key, Server / database. Each type has its own fields; secret fields are hidden until you press 👁, and every field has a <b>Copy</b> button. The clipboard is cleared after 30 seconds.</p>
+<ul>
+<li><b>Tags</b>: type them comma separated (<code>finance, website</code>). They appear in the sidebar and are searchable (<code>#finance</code>).</li>
+<li><b>Custom fields</b> for anything else; tick <i>secret</i> to hide a value.</li>
+<li><b>2FA codes</b>: paste the setup key or <code>otpauth://</code> link of a website into a login's 2FA field and Vaultly shows the current 6-digit code.</li>
+<li><b>Password history</b> keeps the last 5 passwords of a login. <b>Trash</b> keeps deleted items until someone deletes them forever.</li>
+</ul>
+
+<h2 id="generator">Password generator</h2>
+<p>Two modes: <b>random characters</b> (length, character sets, no look-alike characters) and <b>words</b> (a passphrase such as <code>Velvet-Canyon-Trophy7-Mango-Static</code>, easy to type on a phone; 5 words ≈ 65 bits). The word list is the EFF large wordlist.</p>
+
+<h2 id="sharing">Shared vaults and roles</h2>
+<ul>
+<li>Create a vault (<i>+ New vault</i>), then open <b>Settings → Vault management</b> to add members by email. The other person must already have an account and must <b>accept</b> the invitation.</li>
+<li>Roles: <b>Owner</b> (members, settings, snapshots), <b>Editor</b> (add and change items), <b>Viewer</b> (read only).</li>
+<li>Compare the <b>fingerprint</b> shown when adding someone with the one in their Settings (in person or by phone) to be sure you share with the right person.</li>
+<li>Removing a member <b>rotates the vault key</b>, so they cannot read anything added later. Passwords they already saw should be changed.</li>
+</ul>
+
+<h2 id="snapshots">Snapshots (undo for a whole vault)</h2>
+<p>The server keeps an encrypted copy of every shared vault once a day (before the first change of the day, last 14 days) and before every restore. If items were deleted or overwritten by mistake, an owner opens the vault in <b>Settings → Vault management → Snapshots</b> and presses <b>Restore</b>. Every item goes back to its state at that time, deleted ones included; items added later stay. The state before the restore is saved too, so a restore can be undone. Rotating the key clears older snapshots (they were encrypted with the old key).</p>
+
+<h2 id="send">Send: share a secret with someone outside the team</h2>
+<p>Use <b>Send</b> in the sidebar, or the <b>Send…</b> button of an item, to give a password, note or file (up to 10 MB) to someone who has no Vaultly account, e.g. an accountant or a supplier.</p>
+<ul>
+<li>It is encrypted in your browser with a new key that exists only inside the link. The server cannot read it. <b>Copy the link right away</b>: it cannot be shown again.</li>
+<li>Choose how long it works (1 hour to 30 days) and how many times it can be opened (default: once). The page only counts a view when the recipient presses <i>Show the secret</i>, so chat apps generating link previews do not use it up.</li>
+<li>Add a <b>password</b> for extra safety and tell it to the recipient another way (phone). 5 wrong passwords lock the link for 10 minutes.</li>
+<li>Your active links are listed under the form with their view counts; delete a link to stop it at once. The account activity shows when one was opened.</li>
+</ul>
+
+<h2 id="security">Account security</h2>
+<h3>Two-factor sign-in</h3>
+<p><b>Settings → Two-factor sign-in → Set up</b> (asks for your master password). Scan the QR code with an authenticator app (Aegis, 2FAS, Google or Microsoft Authenticator…), enter the code it shows, and save the <b>8 recovery codes</b>. From then on, signing in asks for the 6-digit code after the master password. A recovery code works once instead of the code if you lose your phone. If you lose both, an administrator can turn 2FA off for you (<b>Admin → Reset 2FA</b>) after checking it is really you; your data stays protected by your master password.</p>
+<h3>Signed-in devices and activity</h3>
+<p><b>Settings → Signed-in devices</b> lists every browser signed in to your account, with address and last activity. Sign out one device, or <b>all other devices</b> at once (e.g. after using a shared computer). <i>Account activity</i> lists sign-ins, <b>failed sign-ins</b>, 2FA changes and Send links. Many failed sign-ins you did not make mean someone is guessing: keep a strong master password and turn on 2FA.</p>
+<h3>Auto-lock</h3>
+<p>Vaultly locks after a period without activity (Settings → Auto-lock, default 10 minutes) and forgets the keys in memory.</p>
+
+<h2 id="scan">Security Scan</h2>
+<p>Finds weak, reused and old passwords and logins without 2FA. <b>Check all passwords</b> asks Have I Been Pwned whether a password appeared in a known data breach; only the first 5 characters of its SHA-1 hash leave your browser.</p>
+
+<h2 id="backup">Backup, import and export</h2>
+<ul>
+<li><b>Encrypted backup</b> (Settings): one file with every item you can see, encrypted with a backup password you choose (PBKDF2 + AES-256). It does not depend on this server. <b>Restore</b> adds its items to a vault you choose; nothing is overwritten.</li>
+<li><b>Import CSV</b> from Chrome, Bitwarden, Proton Pass, 1Password and similar.</li>
+<li><b>Export CSV</b> writes everything in plain text; delete the file when you are done. Prefer the encrypted backup.</li>
+</ul>
+
+<h2 id="admin">For administrators</h2>
+<ul>
+<li>Sign-up is by invite only: <b>Admin → Create invite</b> gives a single-use link valid for 7 days, optionally bound to one email.</li>
+<li>Disable a user to sign them out and block them; owners should also remove them from shared vaults (this rotates the key).</li>
+<li><b>Reset 2FA</b> only after confirming the person's identity. Every admin action is in the activity log.</li>
+<li>Back up the server's <code>/data/kasa.db</code> and <code>/data/secret.key</code> (Fly.io volume snapshots are on).</li>
+</ul>
+
+<h2 id="limits">Not included</h2>
+<p>Master password recovery (impossible by design), browser extension / autofill, mobile app, file attachments on items (use Send for one-off files).</p>
+
+<p class="muted">Word list: EFF large wordlist (CC BY 3.0 US, Electronic Frontier Foundation). QR codes: qrcode-generator by Kazuhiko Arase (MIT).</p>
+</main>
+</body>
+</html>

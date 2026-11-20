@@ -143,3 +143,49 @@ export async function totp(input, now = Date.now()) {
   const code = (((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 10 ** p.digits;
   return { code: String(code).padStart(p.digits, '0'), remaining: p.period - (Math.floor(now / 1000) % p.period), period: p.period };
 }
+
+// ---- binary-safe base64 (large files) and base64url for link fragments
+export const b64big = (buf) => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
+export const b64url = (u8) => b64big(u8).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+export const unb64url = (s) => unb64(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+
+// ---- Send: a fresh random key per link; it travels only in the URL #fragment, never to the server
+export async function sendEncrypt(obj) {
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const key = await subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj))));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+  return { enc: b64big(out), key: b64url(raw) };
+}
+export async function sendDecrypt(encB64, keyB64url) {
+  const key = await subtle.importKey('raw', unb64url(keyB64url), 'AES-GCM', false, ['decrypt']);
+  const all = unb64(encB64);
+  return JSON.parse(dec.decode(await subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12) }, key, all.slice(12))));
+}
+
+// ---- encrypted backup file: PBKDF2-SHA256 (600k) + AES-256-GCM, independent of the account keys
+export async function backupEncrypt(password, obj) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const base = await subtle.importKey('raw', enc.encode(password.normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+  const key = await subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: ITERS }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
+  return JSON.stringify({ format: 'vaultly-backup', version: 1, kdf: 'PBKDF2-SHA256', iterations: ITERS, salt: b64(salt), iv: b64(iv), data: b64big(ct) });
+}
+export async function backupDecrypt(password, text) {
+  let f; try { f = JSON.parse(text); } catch { throw new Error('This is not a Vaultly backup file.'); }
+  if (f.format !== 'vaultly-backup') throw new Error('This is not a Vaultly backup file.');
+  const base = await subtle.importKey('raw', enc.encode(password.normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+  const key = await subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(f.salt), iterations: f.iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  try { return JSON.parse(dec.decode(await subtle.decrypt({ name: 'AES-GCM', iv: unb64(f.iv) }, key, unb64(f.data)))); }
+  catch { throw new Error('Wrong backup password, or the file is damaged.'); }
+}
+
+// ---- passphrases from the EFF large wordlist (7776 words, ~12.9 bits each)
+export const parseWordlist = (text) => text.split(/\r?\n/).map((l) => l.split(/\s+/)[1]).filter(Boolean);
+export function passphrase(words, { count = 5, sep = '-', capitalize = false, number = false } = {}) {
+  const w = Array.from({ length: count }, () => words[randInt(words.length)]).map((x) => (capitalize ? x[0].toUpperCase() + x.slice(1) : x));
+  if (number) { const i = randInt(w.length); w[i] += randInt(10); }
+  return w.join(sep);
+}

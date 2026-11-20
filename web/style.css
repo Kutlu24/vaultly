@@ -63,3 +63,9 @@ table{border-collapse:collapse;width:100%} td,th{padding:6px 8px;border-bottom:1
 .opts input{width:auto}
 .genout{font-size:18px;word-break:break-all;padding:10px;background:var(--panel2);border-radius:8px;margin:8px 0}
 .tag{display:inline-block;margin-right:6px}
+.pre{white-space:pre-wrap;overflow-wrap:anywhere}
+img.qr{display:block;background:#fff;padding:8px;border-radius:8px;margin:8px 0;image-rendering:pixelated;width:200px;height:200px}
+a.nav{display:block;text-decoration:none;color:inherit}
+.send{max-width:640px;margin:8vh auto;padding:0 16px}
+.send .secret{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,monospace}
+.help{max-width:820px;margin:0 auto;padding:16px 16px 60px;line-height:1.6}.help h2{margin-top:2em;border-top:1px solid var(--line);padding-top:.6em}.help code{background:var(--panel2);padding:1px 5px;border-radius:4px}
