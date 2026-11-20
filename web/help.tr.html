@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaultly Yardım</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="help">
+<h1><img class="logo" src="icon.svg" alt="" width="28" height="28"> Vaultly yardım</h1>
+<p>Vaultly ekibin parola yöneticisidir. Her şey, ana parolanızdan türetilen anahtarlarla tarayıcınızda şifrelenir. Sunucu yalnızca şifreli veriyi saklar ve parolalarınızı okuyamaz.</p>
+<p><a href="/">← Vaultly'ye dön</a> · <a href="help.html">English</a></p>
+<p class="muted">Uygulamanın kendisi İngilizcedir. Bu sayfada düğme ve menü adları uygulamadaki gibi İngilizce yazılmıştır.</p>
+
+<h2 id="start">Başlarken</h2>
+<ul>
+<li>Bir yönetici size bir <b>davet bağlantısı</b> gönderir. Bağlantıyı açın; adınızı, e-postanızı ve bir <b>ana parola</b> girin (en az 12 karakter; uzun bir cümle iyi bir seçimdir).</li>
+<li><b>Ana parolanızı kimse sıfırlayamaz</b>, yönetici bile. Unutursanız verileriniz kaybolur. Yazın ve güvenli bir yerde saklayın.</li>
+<li>Size <i>Personal</i> adında özel bir kasa açılır. Paylaşılan kasalar, kenar çubuğundaki daveti kabul ettiğinizde görünür.</li>
+</ul>
+
+<h2 id="items">Öğeler ve türler</h2>
+<p>Yeni öğe için <b>+</b> düğmesine basın ve türünü seçin: Login (giriş), Note (not), Card (kart), Identity (kimlik), Wi-Fi, Bank account (banka hesabı), Software license (yazılım lisansı), API key, SSH key, Server / database (sunucu / veritabanı). Her türün kendi alanları vardır. Gizli alanlar 👁 düğmesine basana kadar gizlenir; her alanın bir <b>Copy</b> (kopyala) düğmesi vardır. Pano 30 saniye sonra temizlenir.</p>
+<ul>
+<li><b>Etiketler (Tags)</b>: virgülle ayırarak yazın (<code>finans, web sitesi</code>). Kenar çubuğunda görünürler ve aranabilirler (<code>#finans</code>).</li>
+<li>Başka her şey için <b>özel alanlar (Custom fields)</b>; bir değeri gizlemek için <i>secret</i> kutusunu işaretleyin.</li>
+<li><b>2FA kodları</b>: bir web sitesinin kurulum anahtarını veya <code>otpauth://</code> bağlantısını giriş öğesinin 2FA alanına yapıştırın; Vaultly o anki 6 haneli kodu gösterir.</li>
+<li><b>Dosya ekleri (Attachments)</b>: düzenleme formunda <i>+ Attach files</i> ile her biri en çok 25 MB dosya eklenir (sözleşme, sertifika, tarama). Her dosya tarayıcınızda kendi anahtarıyla şifrelenir; bu anahtar şifreli öğenin içinde durur, sunucu yalnızca okunamaz veri saklar. Öğeyi görebilen herkes dosyayı indirebilir; Viewer rolündekiler dosya ekleyip silemez. Silinen bir dosya 15 gün sunucuda kalır, böylece bir anlık görüntüyü geri yüklemek dosyayı da geri getirir. Şifreli yedekler dosyaları içermez.</li>
+<li><b>Parola geçmişi</b> bir girişin son 5 parolasını tutar. <b>Çöp kutusu (Trash)</b> silinen öğeleri, biri kalıcı olarak silene kadar saklar.</li>
+</ul>
+
+<h2 id="generator">Parola üretici</h2>
+<p>İki mod vardır: <b>rastgele karakterler</b> (uzunluk, karakter kümeleri, birbirine benzeyen karakterler olmadan) ve <b>kelimeler</b> (<code>Velvet-Canyon-Trophy7-Mango-Static</code> gibi bir parola cümlesi; telefonda yazması kolaydır, 5 kelime ≈ 65 bit). Kelime listesi EFF'nin büyük kelime listesidir.</p>
+
+<h2 id="sharing">Paylaşılan kasalar ve roller</h2>
+<ul>
+<li>Bir kasa oluşturun (<i>+ New vault</i>), sonra <b>Settings → Vault management</b> bölümünden üyeleri e-postayla ekleyin. Kişinin bir hesabı olmalı ve daveti <b>kabul etmelidir</b>.</li>
+<li>Roller: <b>Owner</b> (sahip: üyeler, ayarlar, anlık görüntüler), <b>Editor</b> (öğe ekler ve değiştirir), <b>Viewer</b> (yalnızca okur).</li>
+<li>Doğru kişiyle paylaştığınızdan emin olmak için, birini eklerken gösterilen <b>parmak izini (fingerprint)</b> onun Ayarlar'ındaki ile karşılaştırın (yüz yüze ya da telefonda).</li>
+<li>Bir üyeyi çıkarmak <b>kasa anahtarını yeniler</b>; böylece sonradan eklenenleri okuyamaz. Daha önce gördüğü parolalar değiştirilmelidir.</li>
+</ul>
+
+<h2 id="snapshots">Anlık görüntüler (tüm kasa için geri alma)</h2>
+<p>Sunucu her paylaşılan kasanın şifreli bir kopyasını günde bir kez (günün ilk değişikliğinden önce, son 14 gün) ve her geri yüklemeden önce saklar. Öğeler yanlışlıkla silindiyse ya da üzerine yazıldıysa, kasa sahibi kasayı <b>Settings → Vault management → Snapshots</b> bölümünde açar ve <b>Restore</b> düğmesine basar. Her öğe o andaki haline döner, silinenler de dahil; sonradan eklenen öğeler kalır. Geri yüklemeden önceki durum da saklanır, yani geri yükleme de geri alınabilir. Anahtar yenilendiğinde eski anlık görüntüler silinir (eski anahtarla şifrelenmişlerdi).</p>
+
+<h2 id="send">Send: ekip dışındaki birine gizli bilgi göndermek</h2>
+<p>Kenar çubuğundaki <b>Send</b> ya da bir öğedeki <b>Send…</b> düğmesiyle, Vaultly hesabı olmayan birine (muhasebeci, tedarikçi gibi) parola, not ya da 10 MB'a kadar dosya gönderirsiniz.</p>
+<ul>
+<li>İçerik tarayıcınızda, yalnızca bağlantının içinde bulunan yeni bir anahtarla şifrelenir. Sunucu okuyamaz. <b>Bağlantıyı hemen kopyalayın</b>: tekrar gösterilemez.</li>
+<li>Ne kadar süre çalışacağını (1 saat – 30 gün) ve kaç kez açılabileceğini (varsayılan: bir kez) seçin. Sayfa, görüntülemeyi ancak alıcı <i>Show the secret</i> düğmesine bastığında sayar; sohbet uygulamalarının oluşturduğu bağlantı önizlemeleri hakkı tüketmez.</li>
+<li>Ek güvenlik için bir <b>parola</b> ekleyin ve alıcıya başka bir yoldan (telefonla) söyleyin. 5 yanlış parola bağlantıyı 10 dakika kilitler.</li>
+<li>Etkin bağlantılarınız formun altında, kaç kez açıldıklarıyla birlikte listelenir; bir bağlantıyı hemen durdurmak için silin. Hesap hareketlerinde bir bağlantının ne zaman açıldığı görünür.</li>
+</ul>
+
+<h2 id="security">Hesap güvenliği</h2>
+<h3>İki aşamalı giriş (2FA)</h3>
+<p><b>Settings → Two-factor sign-in → Set up</b> (ana parolanızı sorar). QR kodunu bir doğrulama uygulamasıyla (Aegis, 2FAS, Google ya da Microsoft Authenticator…) okutun, gösterdiği kodu girin ve <b>8 kurtarma kodunu</b> saklayın. Bundan sonra girişte, ana paroladan sonra 6 haneli kod istenir. Telefonunuzu kaybederseniz bir kurtarma kodu, kodun yerine bir kez kullanılabilir. İkisini de kaybederseniz, bir yönetici kimliğinizi doğruladıktan sonra 2FA'nızı kapatabilir (<b>Admin → Reset 2FA</b>; yöneticinin kendi ana parolasını ister). Bu sizin hesap hareketlerinizde görünür; verileriniz ana parolanızla korunmaya devam eder. 5 yanlış koddan sonra iki aşamalı giriş 15 dakika kilitlenir.</p>
+<h3>Oturum açık cihazlar ve hareketler</h3>
+<p><b>Settings → Signed-in devices</b>, hesabınızda oturumu açık her tarayıcıyı adresi ve son etkinliğiyle listeler. Tek bir cihazdan ya da <b>diğer tüm cihazlardan</b> çıkış yapabilirsiniz (ör. ortak bir bilgisayar kullandıktan sonra). <i>Account activity</i>; girişleri, <b>başarısız girişleri</b>, 2FA değişikliklerini ve Send bağlantılarını listeler. Sizin yapmadığınız çok sayıda başarısız giriş, birinin parola tahmin etmeye çalıştığını gösterir: güçlü bir ana parola kullanın ve 2FA'yı açın.</p>
+<h3>Otomatik kilit</h3>
+<p>Vaultly bir süre işlem yapılmazsa kilitlenir (Settings → Auto-lock, varsayılan 10 dakika) ve bellekteki anahtarları unutur.</p>
+
+<h2 id="extension">Tarayıcı eklentisi (otomatik doldurma)</h2>
+<p>Chrome, Edge, Brave ve Opera'da web sitelerine kullanıcı adı ve parolayı doldurur.</p>
+<ol>
+<li><b>Settings → Browser extension → Download</b> ile indirin ve zip dosyasını açın.</li>
+<li><code>chrome://extensions</code> sayfasını açın (Edge: <code>edge://extensions</code>), <b>Developer mode</b> (geliştirici modu) anahtarını açın, <b>Load unpacked</b> düğmesine basın ve açtığınız <code>vaultly-extension</code> klasörünü seçin. Vaultly simgesini araç çubuğuna sabitleyin.</li>
+<li>Simgeye tıklayın, sunucu adresini olduğu gibi bırakın, e-postanızı girin, <b>Connect</b> düğmesine basın ve sunucuya erişime izin verin. Ana parolanızla (ve 2FA koduyla) kilidi açın.</li>
+</ol>
+<p>Bir web sitesindeyken eklenti, tam olarak o adres için kaydedilmiş girişleri listeler. <b>Fill</b> kullanıcı adını ve parolayı forma yazar; siz tıklamadan hiçbir şey doldurulmaz. Başka bir site için kaydedilmiş bir giriş önce onay ister (benzer adlı sahte sitelere karşı koruma). <b>Password</b> parolayı kopyalar ve panoyu 30 saniye sonra temizler; <b>2FA code</b> o anki kodu kopyalar. Arama tüm girişleri bulur.</p>
+<p>Ana parolanız hiçbir zaman saklanmaz. Kilit açıldıktan sonra eklenti anahtarları yalnızca tarayıcının belleğinde tutar; tarayıcı kapanınca, bilgisayar kilitlenince ya da 15 dakika boşta kalınca veya <b>Lock</b> düğmesine basınca silinirler. Eklenti <i>Signed-in devices</i> listesinde bir cihaz olarak görünür.</p>
+
+<h2 id="scan">Güvenlik taraması (Security Scan)</h2>
+<p>Zayıf, birden çok yerde kullanılan ve eski parolaları ve 2FA'sı olmayan girişleri bulur. <b>Check all passwords</b>, bir parolanın bilinen bir veri sızıntısında yer alıp almadığını Have I Been Pwned'e sorar; tarayıcınızdan yalnızca parolanın SHA-1 özetinin ilk 5 karakteri çıkar.</p>
+
+<h2 id="backup">Yedek, içe ve dışa aktarma</h2>
+<ul>
+<li><b>Şifreli yedek (Encrypted backup)</b> (Settings): görebildiğiniz tüm öğeleri, seçtiğiniz bir yedek parolasıyla şifrelenmiş tek bir dosyaya yazar (PBKDF2 + AES-256). Bu sunucudan bağımsızdır. <b>Restore</b>, dosyadaki öğeleri seçtiğiniz bir kasaya ekler; hiçbir şeyin üzerine yazılmaz.</li>
+<li>Chrome, Bitwarden, Proton Pass, 1Password ve benzerlerinden <b>CSV içe aktarma</b>.</li>
+<li><b>CSV dışa aktarma</b> her şeyi düz metin olarak yazar; işiniz bitince dosyayı silin. Şifreli yedeği tercih edin.</li>
+</ul>
+
+<h2 id="admin">Yöneticiler için</h2>
+<ul>
+<li>Kayıt yalnızca davetle olur: <b>Admin → Create invite</b>, 7 gün geçerli, tek kullanımlık bir bağlantı verir; isterseniz tek bir e-postaya bağlanabilir.</li>
+<li>Bir kullanıcıyı devre dışı bırakmak oturumunu kapatır ve girişini engeller; kasa sahipleri onu paylaşılan kasalardan da çıkarmalıdır (bu, anahtarı yeniler).</li>
+<li><b>Reset 2FA</b> işlemini yalnızca kişinin kimliğini doğruladıktan sonra yapın. Her yönetici işlemi hareket kaydındadır.</li>
+<li>Sunucudaki <code>/data/kasa.db</code>, <code>/data/secret.key</code> ve dosya ekleri klasörü <code>/data/att/</code> yedeklenmelidir (Fly.io disk anlık görüntüleri açık).</li>
+</ul>
+
+<h2 id="limits">Olmayanlar</h2>
+<p>Ana parola kurtarma (tasarım gereği imkânsız), mobil uygulama, tıklamadan otomatik doldurma, Firefox / Safari eklentisi, şifreli yedekte dosyalar.</p>
+
+<p class="muted">Kelime listesi: EFF large wordlist (CC BY 3.0 US, Electronic Frontier Foundation). QR kodları: qrcode-generator, Kazuhiko Arase (MIT).</p>
+</main>
+</body>
+</html>

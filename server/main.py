@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS snapshots(
   id INTEGER PRIMARY KEY AUTOINCREMENT, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE, at REAL NOT NULL,
   reason TEXT NOT NULL, key_version INTEGER NOT NULL, enc_name TEXT NOT NULL, items TEXT NOT NULL, count INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS snapshots_vault ON snapshots(vault_id, at);
+CREATE TABLE IF NOT EXISTS attachments(
+  id TEXT PRIMARY KEY, vault_id TEXT NOT NULL, size INTEGER NOT NULL, created_by TEXT NOT NULL,
+  created REAL NOT NULL, deleted_at REAL);
+CREATE INDEX IF NOT EXISTS attachments_vault ON attachments(vault_id);
 """
 
 
@@ -730,6 +734,9 @@ def rename_vault(vid: str, body: Rename, u=Depends(current_user)):
 def delete_vault(vid: str, u=Depends(current_user)):
     with db() as con:
         need(con, vid, u, "owner")
+        for r in con.execute("SELECT id FROM attachments WHERE vault_id=?", (vid,)).fetchall():
+            (ATT_DIR / r["id"]).unlink(missing_ok=True)
+        con.execute("DELETE FROM attachments WHERE vault_id=?", (vid,))
         con.execute("DELETE FROM vaults WHERE id=?", (vid,))
         log(con, u["id"], vid, "vault.delete")
     return {"ok": True}
@@ -888,6 +895,82 @@ def restore_snapshot(vid: str, sid: int, u=Depends(current_user)):
             restored += 1
         log(con, u["id"], vid, "vault.snapshot_restore", f"{sid}:{restored}")
     return {"restored": restored}
+
+
+# ---------------------------------------------------------------- attachments
+# Files are encrypted in the browser with a random per-file key that is stored inside the (encrypted) item.
+# The server keeps opaque blobs. Deleting only marks a blob; it is still served and purged only after the
+# snapshot window (15 > 14 days), so restoring a snapshot also brings back its files.
+ATT_DIR = DATA_DIR / "att"
+ATT_DIR.mkdir(exist_ok=True)
+MAX_ATT = 25 * 1024 * 1024
+ATT_VAULT_QUOTA = int(os.environ.get("KASA_ATT_VAULT_MB", "300")) * 1024 * 1024
+ATT_TOTAL_QUOTA = int(os.environ.get("KASA_ATT_TOTAL_MB", "600")) * 1024 * 1024
+ATT_KEEP_DELETED = 15 * 86400
+import re as _re
+ATT_ID = _re.compile(r"^[0-9a-f]{32}$")
+
+
+def att_path(aid: str) -> Path:
+    if not ATT_ID.match(aid):
+        raise HTTPException(400, "Bad attachment id")
+    return ATT_DIR / aid
+
+
+def purge_attachments(con):
+    for r in con.execute("SELECT id FROM attachments WHERE deleted_at IS NOT NULL AND deleted_at<?", (time.time() - ATT_KEEP_DELETED,)).fetchall():
+        (ATT_DIR / r["id"]).unlink(missing_ok=True)
+        con.execute("DELETE FROM attachments WHERE id=?", (r["id"],))
+
+
+@app.put("/api/vaults/{vid}/attachments/{aid}")
+async def put_attachment(vid: str, aid: str, request: Request, u=Depends(current_user)):
+    p = att_path(aid)
+    cl = request.headers.get("content-length", "")
+    if cl.isdigit() and int(cl) > MAX_ATT + 64:
+        raise HTTPException(413, "Files up to 25 MB")
+    body = bytearray()
+    async for chunk in request.stream():   # stop at the cap instead of buffering an unbounded upload
+        body += chunk
+        if len(body) > MAX_ATT + 64:
+            raise HTTPException(413, "Files up to 25 MB")
+    if len(body) < 28:
+        raise HTTPException(400, "Empty or damaged file")
+    with db() as con:
+        need(con, vid, u, "owner", "editor")
+        purge_attachments(con)
+        if con.execute("SELECT 1 FROM attachments WHERE id=?", (aid,)).fetchone():
+            raise HTTPException(409, "Attachment id already used")
+        in_vault = con.execute("SELECT COALESCE(SUM(size),0) n FROM attachments WHERE vault_id=?", (vid,)).fetchone()["n"]
+        total = con.execute("SELECT COALESCE(SUM(size),0) n FROM attachments").fetchone()["n"]
+        if in_vault + len(body) > ATT_VAULT_QUOTA or total + len(body) > ATT_TOTAL_QUOTA:
+            raise HTTPException(413, "File storage is full; delete old attachments first")
+        p.write_bytes(bytes(body))
+        con.execute("INSERT INTO attachments(id,vault_id,size,created_by,created) VALUES(?,?,?,?,?)", (aid, vid, len(body), u["id"], time.time()))
+        log(con, u["id"], vid, "attachment.add", aid[:8])
+    return {"size": len(body)}
+
+
+@app.get("/api/vaults/{vid}/attachments/{aid}")
+def get_attachment(vid: str, aid: str, u=Depends(current_user)):
+    from fastapi.responses import FileResponse
+    p = att_path(aid)
+    with db() as con:
+        need(con, vid, u)
+        r = con.execute("SELECT 1 FROM attachments WHERE id=? AND vault_id=?", (aid, vid)).fetchone()
+    if not r or not p.is_file():
+        raise HTTPException(404, "Attachment not found")
+    return FileResponse(p, media_type="application/octet-stream")
+
+
+@app.delete("/api/vaults/{vid}/attachments/{aid}")
+def delete_attachment(vid: str, aid: str, u=Depends(current_user)):
+    att_path(aid)
+    with db() as con:
+        need(con, vid, u, "owner", "editor")
+        con.execute("UPDATE attachments SET deleted_at=? WHERE id=? AND vault_id=? AND deleted_at IS NULL", (time.time(), aid, vid))
+        log(con, u["id"], vid, "attachment.delete", aid[:8])
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- items

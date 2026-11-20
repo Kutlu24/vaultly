@@ -121,4 +121,28 @@ const bk = await C.backupEncrypt('backup password 12', { items: [{ vault: 'Finan
 assert.equal((await C.backupDecrypt('backup password 12', bk)).items[0].data.title, 'Bank');
 await assert.rejects(C.backupDecrypt('wrong password!!', bk), /Wrong backup password/); ok('encrypted backup round trip');
 const words = C.parseWordlist('11111\tabacus\n11112\tabdomen\n'); assert.match(C.passphrase(words, { count: 4, sep: '-', capitalize: true, number: false }), /^(Abacus|Abdomen)(-(Abacus|Abdomen)){3}$/); ok('passphrase');
+// ---- attachments (encrypted per file, stored as opaque blobs)
+const rawCall = async (m, p, body, tok) => { const r = await fetch(B + '/api' + p, { method: m, headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/octet-stream' }, body }); return { s: r.status, buf: r.ok && m === 'GET' ? new Uint8Array(await r.arrayBuffer()) : null }; };
+const vk2 = await C.newVaultKey();
+const v2 = (await call('POST', '/vaults', { enc_name: await C.encJSON(vk2, { name: 'Docs' }), wrapped_key: await C.wrapVaultKey(vk2, a.j.user.public_key) }, A2)).j.id;
+const file = new TextEncoder().encode('contract scan '.repeat(1000));
+const { blob, key: fkey } = await C.fileEncrypt(file);
+const aid = 'ab'.repeat(16);
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${aid}`, blob, Bt3)).s, 404); ok('non-member cannot upload');
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/../../x`, blob, A2)).s >= 400, true);
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${aid}`, blob, A2)).s, 200);
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${aid}`, blob, A2)).s, 409); ok('upload; ids cannot be overwritten');
+await call('POST', `/vaults/${v2}/members`, { user_id: b.j.user.id, role: 'viewer', wrapped_key: await C.wrapVaultKey(vk2, b.j.user.public_key) }, A2);
+await call('POST', `/vaults/${v2}/accept`, null, Bt3);
+const got = await rawCall('GET', `/vaults/${v2}/attachments/${aid}`, null, Bt3);
+assert.equal(got.s, 200); assert.equal(new TextDecoder().decode(await C.fileDecrypt(got.buf, fkey)), 'contract scan '.repeat(1000)); ok('viewer downloads and decrypts');
+assert.ok(!new TextDecoder().decode(got.buf).includes('contract')); ok('server only holds ciphertext');
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${'cd'.repeat(16)}`, blob, Bt3)).s, 403); ok('viewer cannot upload');
+assert.equal((await call('DELETE', `/vaults/${v2}/attachments/${aid}`, null, Bt3)).s, 403);
+assert.equal((await call('DELETE', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 200);
+assert.equal((await rawCall('GET', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 200); ok('deleted files stay restorable (snapshot window)');
+assert.equal((await rawCall('PUT', `/vaults/${v2}/attachments/${'ef'.repeat(16)}`, new Uint8Array(26 * 1024 * 1024), A2)).s, 413); ok('25 MB limit');
+await call('DELETE', `/vaults/${v2}`, null, A2);
+assert.equal((await rawCall('GET', `/vaults/${v2}/attachments/${aid}`, null, A2)).s, 404); ok('vault delete removes its files');
+
 console.log('\nALL FEATURE TESTS PASSED');

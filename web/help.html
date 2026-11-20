@@ -11,7 +11,7 @@
 <main class="help">
 <h1><img class="logo" src="icon.svg" alt="" width="28" height="28"> Vaultly help</h1>
 <p>Vaultly is the team's password manager. Everything is encrypted in your browser with keys derived from your master password: the server only stores ciphertext and cannot read your passwords.</p>
-<p><a href="/">← Back to Vaultly</a></p>
+<p><a href="/">← Back to Vaultly</a> · <a href="help.tr.html">Türkçe</a></p>
 
 <h2 id="start">Getting started</h2>
 <ul>
@@ -26,6 +26,7 @@
 <li><b>Tags</b>: type them comma separated (<code>finance, website</code>). They appear in the sidebar and are searchable (<code>#finance</code>).</li>
 <li><b>Custom fields</b> for anything else; tick <i>secret</i> to hide a value.</li>
 <li><b>2FA codes</b>: paste the setup key or <code>otpauth://</code> link of a website into a login's 2FA field and Vaultly shows the current 6-digit code.</li>
+<li><b>Attachments</b>: in the edit form, <i>+ Attach files</i> adds files of up to 25 MB each (contracts, certificates, scans). Each file is encrypted in your browser with its own key, which is stored inside the encrypted item; the server keeps only unreadable data. Everyone who can see the item can download the file; viewers cannot add or remove files. A removed file stays on the server for 15 days, so restoring a snapshot brings it back. Encrypted backups do not include files.</li>
 <li><b>Password history</b> keeps the last 5 passwords of a login. <b>Trash</b> keeps deleted items until someone deletes them forever.</li>
 </ul>
 
@@ -60,6 +61,16 @@
 <h3>Auto-lock</h3>
 <p>Vaultly locks after a period without activity (Settings → Auto-lock, default 10 minutes) and forgets the keys in memory.</p>
 
+<h2 id="extension">Browser extension (autofill)</h2>
+<p>Fills usernames and passwords on websites in Chrome, Edge, Brave and Opera.</p>
+<ol>
+<li><b>Settings → Browser extension → Download</b>, then unzip the file.</li>
+<li>Open <code>chrome://extensions</code> (Edge: <code>edge://extensions</code>), turn on <b>Developer mode</b>, click <b>Load unpacked</b> and choose the unzipped <code>vaultly-extension</code> folder. Pin the Vaultly icon.</li>
+<li>Click the icon, keep the server address, enter your email, press <b>Connect</b> and allow access to the server. Unlock with your master password (and 2FA code).</li>
+</ol>
+<p>On a website, the extension lists the logins saved for exactly that address. <b>Fill</b> puts the username and password into the form; nothing is filled without your click. A login saved for another site asks first (protection against look-alike sites). <b>Password</b> copies it and clears the clipboard after 30 seconds; <b>2FA code</b> copies the current code. Search finds every login.</p>
+<p>Your master password is never stored. After unlocking, the extension keeps the keys in the browser's memory only; they are gone when the browser closes, the computer locks or is idle for 15 minutes, or you press <b>Lock</b>. The extension appears as a device in <i>Signed-in devices</i>.</p>
+
 <h2 id="scan">Security Scan</h2>
 <p>Finds weak, reused and old passwords and logins without 2FA. <b>Check all passwords</b> asks Have I Been Pwned whether a password appeared in a known data breach; only the first 5 characters of its SHA-1 hash leave your browser.</p>
 
@@ -75,11 +86,11 @@
 <li>Sign-up is by invite only: <b>Admin → Create invite</b> gives a single-use link valid for 7 days, optionally bound to one email.</li>
 <li>Disable a user to sign them out and block them; owners should also remove them from shared vaults (this rotates the key).</li>
 <li><b>Reset 2FA</b> only after confirming the person's identity. Every admin action is in the activity log.</li>
-<li>Back up the server's <code>/data/kasa.db</code> and <code>/data/secret.key</code> (Fly.io volume snapshots are on).</li>
+<li>Back up the server's <code>/data/kasa.db</code>, <code>/data/secret.key</code> and the attachment folder <code>/data/att/</code> (Fly.io volume snapshots are on).</li>
 </ul>
 
 <h2 id="limits">Not included</h2>
-<p>Master password recovery (impossible by design), browser extension / autofill, mobile app, file attachments on items (use Send for one-off files).</p>
+<p>Master password recovery (impossible by design), mobile app, automatic filling without a click, Firefox / Safari extension, files in encrypted backups.</p>
 
 <p class="muted">Word list: EFF large wordlist (CC BY 3.0 US, Electronic Frontier Foundation). QR codes: qrcode-generator by Kazuhiko Arase (MIT).</p>
 </main>

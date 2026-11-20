@@ -57,6 +57,23 @@ async function api(method, path, body) {
   return j;
 }
 
+async function apiRaw(method, path, body) {   // binary up/downloads (attachments)
+  const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + S.token, ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) }, body });
+  if (!r.ok) { let m = 'Error ' + r.status; try { m = (await r.json()).detail || m; } catch { /* binary */ } if (r.status === 401) lock('Session expired, please sign in again.'); throw new Error(m); }
+  return r;
+}
+const fmtSize = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+const attsOf = (d) => (Array.isArray(d.attachments) ? d.attachments.filter((a) => a && /^[0-9a-f]{32}$/.test(a.id) && typeof a.key === 'string') : []);
+async function downloadAtt(vid, a, btn) {
+  const old = btn.textContent; btn.textContent = '…'; btn.disabled = true;
+  try {
+    const bytes = await C.fileDecrypt(await (await apiRaw('GET', `/vaults/${vid}/attachments/${a.id}`)).arrayBuffer(), a.key);
+    const link = h('a', { href: URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' })), download: String(a.name || 'file').replace(/[\\/]/g, '_') });
+    link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  } catch (e) { toast(errMsg(e) === 'OperationError' ? 'File is damaged' : errMsg(e)); }
+  btn.textContent = old; btn.disabled = false;
+}
+
 function modal(title, ...body) {
   const d = h('dialog', {}, h('h3', {}, title), ...body);
   d.addEventListener('close', () => d.remove());
@@ -224,7 +241,7 @@ function renderSide() {
     nav('Send (share a secret)', { k: 'send' }),
     S.user.is_admin && nav('Admin', { k: 'admin' }),
     nav('Settings', { k: 'settings' }),
-    h('a', { class: 'nav', href: 'help.html', target: '_blank', rel: 'noopener' }, 'Help'),
+    h('a', { class: 'nav', href: (navigator.language || '').toLowerCase().startsWith('tr') ? 'help.tr.html' : 'help.html', target: '_blank', rel: 'noopener' }, 'Help'),
     h('div', { class: 'spacer' }),
     h('div', { class: 'muted', style: null }, S.user.email),
     h('button', { onclick: async () => { try { await api('POST', '/logout'); } catch { /* ignore */ } lock('Signed out.'); } }, '🔒 Lock'));
@@ -301,6 +318,9 @@ function itemView(it) {
   }
   box.append(fieldRow('Notes', d.notes));
   for (const f of d.fields || []) box.append(fieldRow(f.k, f.v, { secret: f.secret }));
+  if (attsOf(d).length) box.append(h('div', { class: 'card' }, h('div', { class: 'l muted' }, 'Attachments'),
+    ...attsOf(d).map((a) => h('div', { class: 'row' }, h('span', { class: 'grow' }, '📎 ', String(a.name || 'file'), h('span', { class: 'muted' }, ' ' + fmtSize(+a.size || 0))),
+      h('button', { class: 'small', onclick: (e) => downloadAtt(it.vid, a, e.target) }, 'Download')))));
   if (d.history?.length) box.append(h('details', { class: 'card' }, h('summary', {}, `Password history (${d.history.length})`),
     ...d.history.map((x) => h('div', { class: 'row' }, h('span', { class: 'mono grow' }, x.p), h('span', { class: 'muted' }, new Date(x.t).toLocaleDateString('en-GB')), h('button', { class: 'small', onclick: () => copy(x.p) }, 'Copy')))));
   box.append(h('p', { class: 'muted' }, 'Last changed: ' + fmtDate(it.updated_at)));
@@ -342,7 +362,11 @@ async function trash(it, flag) {
 }
 async function hardDelete(it) {
   if (!confirm('This item will be permanently deleted. Are you sure?')) return;
-  try { await api('DELETE', `/vaults/${it.vid}/items/${it.id}`); S.items.delete(it.id); S.sel = null; renderAll(); } catch (e) { toast(errMsg(e)); }
+  try {
+    await api('DELETE', `/vaults/${it.vid}/items/${it.id}`);
+    for (const a of attsOf(it.data)) { try { await api('DELETE', `/vaults/${it.vid}/attachments/${a.id}`); } catch { /* purged later */ } }
+    S.items.delete(it.id); S.sel = null; renderAll();
+  } catch (e) { toast(errMsg(e)); }
 }
 
 // ------------------------------------------------------------------ edit form
@@ -393,6 +417,18 @@ function editForm(ed) {
       if (o.secret && !o.area && (k === 'password' || k === 'pin' || k === 'passphrase')) parts.push(h('button', { type: 'button', class: 'small', onclick: () => openGenerator((p) => { refs['x_' + k].value = p; }) }, '🎲 Generate'));
     }
     parts.push(input('tags', 'Tags (comma separated, e.g. finance, website)', { v: tagsOf(d).join(', ') }));
+    const attBox = h('div');
+    const drawAtt = () => attBox.replaceChildren(
+      ...attsOf(d).map((a) => h('div', { class: 'row' }, h('span', { class: 'grow' }, '📎 ' + (a.name || 'file') + ' ', h('span', { class: 'muted' }, fmtSize(+a.size || 0))),
+        h('button', { type: 'button', class: 'small', onclick: () => { d.attachments = attsOf(d).filter((x) => x !== a); (ed.removed ||= []).push(a.id); drawAtt(); } }, '✕'))),
+      ...(ed.newFiles || []).map((f) => h('div', { class: 'row' }, h('span', { class: 'grow' }, '📎 ' + f.name + ' ', h('span', { class: 'muted' }, fmtSize(f.size) + ' · uploaded on save')),
+        h('button', { type: 'button', class: 'small', onclick: () => { ed.newFiles = ed.newFiles.filter((x) => x !== f); drawAtt(); } }, '✕'))),
+      h('label', { class: 'small' }, '+ Attach files (encrypted, up to 25 MB each) ', h('input', { type: 'file', multiple: true, onchange: (e) => {
+        const big = [...e.target.files].filter((f) => f.size > 25 * 1024 * 1024); if (big.length) toast('Too large (max 25 MB): ' + big.map((f) => f.name).join(', '));
+        ed.newFiles = [...(ed.newFiles || []), ...[...e.target.files].filter((f) => f.size <= 25 * 1024 * 1024)]; drawAtt();
+      } })));
+    drawAtt();
+    parts.push(h('label', {}, 'Attachments'), attBox);
     parts.push(input('notes', 'Notes', { v: d.notes, area: true }), h('label', {}, 'Custom fields'), fieldsBox,
       h('button', { type: 'button', class: 'small', onclick: () => addRow() }, '+ Add field'),
       h('div', { class: 'row', class2: null }, h('button', { class: 'primary', type: 'submit' }, 'Save'), h('button', { type: 'button', onclick: () => { S.edit = null; renderDetail(); } }, 'Cancel')));
@@ -404,9 +440,21 @@ function editForm(ed) {
         if (type === 'login' && old && old.data.password && old.data.password !== d.password) {
           d.history = [{ p: old.data.password, t: Date.now() }, ...(old.data.history || [])].slice(0, 5); d.pw_changed = Date.now();
         } else if (type === 'login' && !old) d.pw_changed = Date.now();
-        const it = await persist(old ? old.vid : ed.vid, old, d);
+        const vid = old ? old.vid : ed.vid;
+        d.attachments = attsOf(d);
+        for (const f of ed.newFiles || []) {   // encrypt + upload first, so the saved item never points at a missing file
+          const { blob, key } = await C.fileEncrypt(new Uint8Array(await f.arrayBuffer()));
+          const aid = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('');
+          toast('Encrypting and uploading ' + f.name + '…');
+          await apiRaw('PUT', `/vaults/${vid}/attachments/${aid}`, blob);
+          d.attachments.push({ id: aid, name: f.name.slice(0, 200), size: f.size, type: f.type || '', key });
+        }
+        ed.newFiles = [];
+        const it = await persist(vid, old, d);
+        for (const aid of ed.removed || []) { try { await api('DELETE', `/vaults/${vid}/attachments/${aid}`); } catch { /* kept for 15 days anyway */ } }
+        ed.removed = [];
         S.edit = null; S.sel = it.id; renderAll(); toast('Saved');
-      } catch { /* toast shown */ }
+      } catch (er) { toast(errMsg(er)); }
     } }, ...parts);
     wrap.replaceChildren(form);
     refs.title.focus();
@@ -745,7 +793,7 @@ function backupCard() {
   const writable = S.vaults.filter((v) => v.key && ['owner', 'editor'].includes(v.role));
   const target = h('select', {}, writable.map((v) => h('option', { value: v.id }, v.name)));
   return h('div', { class: 'card' }, h('h3', {}, 'Encrypted backup'),
-    h('p', { class: 'muted' }, 'A file with every item you can see (all vaults), encrypted with a password you choose. Keep it somewhere safe, e.g. a USB stick. It does not depend on this server or your account.'),
+    h('p', { class: 'muted' }, 'A file with every item you can see (all vaults), encrypted with a password you choose. Keep it somewhere safe, e.g. a USB stick. It does not depend on this server or your account. Attached files are not included.'),
     p1, p2, h('button', { class: 'primary', onclick: async () => {
       out.className = 'err'; out.textContent = '';
       try {
@@ -762,7 +810,7 @@ function backupCard() {
       try {
         if (!file.files[0]) throw new Error('Choose the backup file.');
         const b = await C.backupDecrypt(rpw.value, await file.files[0].text());
-        let n = 0; for (const it of b.items || []) { if (it?.data && typeof it.data === 'object') { const d = { ...it.data }; delete d.history; await persist(target.value, null, d); n++; out.className = 'muted'; out.textContent = `${n}/${b.items.length}…`; } }
+        let n = 0; for (const it of b.items || []) { if (it?.data && typeof it.data === 'object') { const d = { ...it.data }; delete d.history; delete d.attachments; await persist(target.value, null, d); n++; out.className = 'muted'; out.textContent = `${n}/${b.items.length}…`; } }
         out.className = 'ok'; out.textContent = `${n} items restored.`; renderSide();
       } catch (e) { out.className = 'err'; out.textContent = errMsg(e); }
     } }, 'Restore'), out);
@@ -779,6 +827,12 @@ function settingsView() {
     h('div', { class: 'card' }, h('h3', {}, 'Account'), h('div', {}, `${S.user.name} · ${S.user.email}`), h('div', { class: 'muted' }, 'Public-key fingerprint (verify it with the other person when sharing): ', fp)),
     h('div', { class: 'card' }, h('h3', {}, 'Auto-lock'), minutes),
     twofaCard(), sessionsCard(),
+    h('div', { class: 'card' }, h('h3', {}, 'Browser extension (autofill)'),
+      h('p', { class: 'muted' }, 'Fill usernames and passwords on websites with one click, in Chrome, Edge, Brave or Opera. Your master password stays in the extension, like here.'),
+      h('ol', {}, h('li', {}, h('a', { href: 'vaultly-extension.zip', download: 'vaultly-extension.zip' }, 'Download the extension (.zip)'), ' and unzip it.'),
+        h('li', {}, 'Open ', h('code', {}, 'chrome://extensions'), ' (Edge: ', h('code', {}, 'edge://extensions'), '), turn on Developer mode, click “Load unpacked” and choose the unzipped folder.'),
+        h('li', {}, 'Click the Vaultly icon, enter your email, Connect, then unlock with your master password.')),
+      h('p', { class: 'muted' }, 'Details: Help → Browser extension.')),
     h('div', { class: 'card' }, h('h3', {}, 'Vault management'), h('div', { class: 'row wrap' }, S.vaults.filter((v) => !v.broken).map((v) => h('button', { onclick: () => vaultDialog(v) }, `${v.name} (${ROLES[v.role]})`)))),
     h('div', { class: 'card' }, h('h3', {}, 'Change master password'), h('label', {}, 'Current'), cur, h('label', {}, 'New (at least 12 characters)'), n1, h('label', {}, 'New (repeat)'), n2, pwOut,
       h('button', { class: 'primary', onclick: async () => {

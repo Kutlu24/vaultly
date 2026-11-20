@@ -189,3 +189,18 @@ export function passphrase(words, { count = 5, sep = '-', capitalize = false, nu
   if (number) { const i = randInt(w.length); w[i] += randInt(10); }
   return w.join(sep);
 }
+
+// ---- attachments: each file gets its own random AES-256-GCM key, stored inside the (encrypted) item
+export async function fileEncrypt(bytes) {
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const key = await subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+  return { blob: out, key: b64(raw) };
+}
+export async function fileDecrypt(blob, keyB64) {
+  const key = await subtle.importKey('raw', unb64(keyB64), 'AES-GCM', false, ['decrypt']);
+  const u = new Uint8Array(blob);
+  return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)));
+}
